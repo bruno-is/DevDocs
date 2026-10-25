@@ -1,0 +1,91 @@
+---
+import type { ContentBlock } from "@/content.config";
+import { formatInline } from "@/lib/format";
+type Block = Extract<
+	ContentBlock,
+	{ type: "sources" | "exercise" | "diagram" }
+>;
+interface Props {
+	block: Block;
+}
+const { block } = Astro.props;
+---
+
+{
+	block.type === "sources" && (
+		<aside
+			class="rounded-2xl bg-surface-1 p-5"
+			aria-label={block.title ?? "Referências"}
+		>
+			<h4 class="font-mono text-xs tracking-widest text-accent uppercase">
+				{block.title ?? "Referências e aprofundamento"}
+			</h4>
+			<ul class="mt-4 grid gap-3">
+				{block.items.map((source) => (
+					<li class="min-w-0">
+						<a
+							class="wrap-anywhere text-sm text-accent-strong underline underline-offset-4 hover:text-ink"
+							href={source.url}
+						>
+							{source.label}
+						</a>
+					</li>
+				))}
+			</ul>
+		</aside>
+	)
+}
+
+{
+	block.type === "exercise" && (
+		<section class="grid gap-4 rounded-2xl bg-surface-1 p-5">
+			<h4 class="font-display text-lg text-ink">
+				{block.title ?? "Teste seu raciocínio"}
+			</h4>
+			<p
+				class="wrap-anywhere max-w-reading leading-relaxed text-ink-soft"
+				set:html={formatInline(block.prompt)}
+			/>
+			<details class="rounded-xl bg-surface-2 p-4">
+				<summary class="cursor-pointer font-mono text-sm text-accent-strong">
+					Ver resposta comentada e critérios
+				</summary>
+				<p
+					class="wrap-anywhere mt-4 max-w-reading leading-relaxed text-ink-soft"
+					set:html={formatInline(block.answer)}
+				/>
+				<ul class="mt-4 grid list-disc gap-2 pl-5 text-sm leading-relaxed text-muted">
+					{block.rubric.map((criterion) => (
+						<li class="wrap-anywhere" set:html={formatInline(criterion)} />
+					))}
+				</ul>
+			</details>
+		</section>
+	)
+}
+
+{
+	block.type === "diagram" && (
+		<figure class="min-w-0 rounded-2xl bg-surface-1 p-5">
+			<figcaption class="mb-5 max-w-reading text-sm leading-relaxed text-muted">
+				{block.caption}
+			</figcaption>
+			<ol class="grid gap-3 sm:grid-cols-2">
+				{block.nodes.map((node, index) => (
+					<li class="min-w-0 rounded-xl bg-surface-2 p-4">
+						<span class="font-mono text-xs text-accent" aria-hidden="true">
+							{String(index + 1).padStart(2, "0")} →
+						</span>
+						<p class="wrap-anywhere mt-2 font-display font-semibold text-ink">
+							{node.label}
+						</p>
+						<p
+							class="wrap-anywhere mt-2 text-sm leading-relaxed text-muted"
+							set:html={formatInline(node.detail)}
+						/>
+					</li>
+				))}
+			</ol>
+		</figure>
+	)
+}

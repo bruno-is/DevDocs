@@ -9,10 +9,12 @@ import { withBase } from "@/lib/paths";
 
 export const getStaticPaths = (async () => {
 	const groups = await getDocsGroupedByTech();
-	return groups.map(({ tech, meta, docs }) => ({
-		params: { tech },
-		props: { tech, meta, docs },
-	}));
+	return groups
+		.filter(({ tech }) => tech !== "sistemas")
+		.map(({ tech, meta, docs }) => ({
+			params: { tech },
+			props: { tech, meta, docs },
+		}));
 }) satisfies GetStaticPaths;
 
 const { tech, meta, docs } = Astro.props;

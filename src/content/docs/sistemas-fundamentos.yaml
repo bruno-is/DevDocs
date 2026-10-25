@@ -1,0 +1,184 @@
+id: sistemas-fundamentos
+title: "Sistemas: fundamentos, capacidade e falhas"
+subtitle: "Da requisição à persistência: processos, recursos, concorrência e contas para avaliar um sistema de dados."
+cardDescription: Construa modelos de latência, vazão, capacidade e falhas antes de escolher uma arquitetura.
+tech: sistemas
+order: 10
+readerLayout: narrative
+codeLanguage: javascript
+learning:
+  module: Fundamentos de sistemas
+  level: fundamentos
+  prerequisites: []
+  objectives:
+    - Desenhar o caminho de uma escrita e identificar quais componentes guardam estado.
+    - Converter volumes diários em taxas, armazenamento e hipóteses de pico.
+    - Diferenciar concorrência, paralelismo, latência e throughput usando unidades.
+    - Explicar uma resposta perdida sem confundir timeout com transação desfeita.
+quickStart:
+  title: Um pedido acompanha toda a formação
+  kicker: Comece por uma fronteira pequena
+  description: Uma plataforma fictícia recebe chamados de atendimento, grava alterações e atualiza uma projeção para consulta. Primeiro entenda uma única gravação. Depois acompanhe os efeitos quando existem mais clientes, cópias e falhas.
+  steps:
+    - Leia o caminho da escrita e explique quem pode confirmar cada etapa.
+    - Refaça as contas de capacidade com as unidades visíveis.
+    - Responda aos exercícios antes de abrir a solução comentada.
+sections:
+  - id: caminho-da-escrita
+    name: O caminho de uma escrita
+    entries:
+      - title: Um sistema começa por uma promessa observável
+        kicker: Requisito antes do produto
+        description: >-
+          Ao clicar em salvar, o atendente espera conseguir consultar o chamado depois. Essa frase contém várias perguntas: depois de quanto tempo, em qual tela, após qual tipo de falha e com qual tolerância a perda? Transforme a expectativa em comportamento verificável. Neste curso, uma gravação confirmada precisa permanecer no banco após a reinicialização do processo; a projeção assíncrona pode levar segundos para aparecer e informa sua versão. Uma resposta HTTP bem-sucedida só é correta se corresponder à promessa escolhida. O banco pode ter confirmado a transação e a API cair antes de responder. O cliente verá erro mesmo com o dado persistido. A diferença entre estado do negócio e resultado de transporte orientará idempotência, CDC e recuperação nos próximos módulos.
+        tags: [requisição, persistência, contrato, timeout]
+      - title: Separe execução de confirmação
+        description: >-
+          A API recebe bytes, valida o pedido, obtém uma conexão, envia SQL e espera o banco. O banco verifica restrições, controla concorrência e executa seu protocolo de persistência. Só então a aplicação responde. Cada seta consome tempo e pode falhar independentemente. Este desenho representa uma escrita síncrona simples; não afirma que todas as páginas de dados sejam sincronizadas no disco a cada commit. O mecanismo de log permitirá adiar parte desse trabalho. Acrescentar uma fila ao desenho desloca o ponto de confirmação: aceitar uma mensagem no broker não equivale a ter aplicado a mudança no banco de destino. Sempre rotule o que significa cada confirmação e qual componente é responsável por retomar uma etapa interrompida.
+        contentBlocks:
+          - type: diagram
+            caption: Caminho de confirmação de uma alteração; a resposta pode se perder depois do commit.
+            nodes:
+              - label: Cliente
+                detail: Envia operação com identidade estável e aguarda uma resposta.
+              - label: API
+                detail: Valida, limita concorrência e solicita uma transação.
+              - label: Banco
+                detail: Aplica regras e confirma conforme a configuração de durabilidade.
+              - label: API e cliente
+                detail: A resposta comunica o resultado; sua ausência deixa o resultado desconhecido.
+  - id: recursos-e-execucao
+    name: Recursos e execução
+    entries:
+      - title: Processo, thread e memória não são sinônimos
+        description: >-
+          Um processo é uma instância de programa com recursos e espaço de endereçamento administrados pelo sistema operacional. Threads são fluxos de execução que compartilham recursos do processo. Compartilhar memória permite comunicação rápida, mas exige coordenação quando duas threads alteram o mesmo objeto. Memória de processo desaparece ao encerrá-lo; um arquivo pode sobreviver, mas sua sobrevivência depende de como foi escrito e sincronizado. Um container continua executando processos sobre um kernel: limites de CPU e memória restringem o que podem consumir. Não transforme o tamanho da máquina em orçamento automaticamente disponível para a aplicação. Banco, cache do sistema operacional, runtime e agentes de observabilidade disputam recursos. Essa distinção explica por que aumentar o número de workers pode aumentar contenção em vez de acelerar o serviço.
+        tags: [processo, thread, memória, container, cgroups]
+      - title: I/O e CPU exigem perguntas diferentes
+        description: >-
+          CPU-bound significa que o trabalho está limitado principalmente por processamento, como compressão ou transformação de um lote. I/O-bound significa que espera por disco, rede ou outro recurso externo domina o tempo. Uma consulta bloqueada por outra transação também fica esperando, mas instalar um SSD não resolve esse bloqueio. Antes de otimizar, separe tempo executando, tempo esperando recurso e tempo na fila. Leitura atendida em memória não tem o mesmo custo da leitura física. Rede lenta pode significar RTT alto, perda, retransmissões, resolução DNS ou saturação de banda. Uma medição agregada de CPU baixa não prova que o sistema tem capacidade: uma única thread saturada ou uma chave muito disputada pode limitar todo o fluxo.
+        tags: [CPU, I/O, gargalo, disco, rede, contenção]
+      - title: Concorrência organiza espera; paralelismo executa junto
+        description: >-
+          Dez requisições podem estar em andamento em um único núcleo, alternando execução e espera: há concorrência. Duas instruções executando ao mesmo tempo em núcleos distintos ilustram paralelismo. Uma API com I/O assíncrono mantém muitos pedidos em andamento sem dedicar uma thread bloqueada a cada espera; isso não aumenta a capacidade física do banco. Se todos os pedidos atualizam a mesma linha, o controle de concorrência continua serializando a região crítica. Divida trabalho apenas onde as invariantes permitem. Para comparar configurações, meça operações concluídas e latência sob o mesmo conjunto de consultas, distribuição de chaves e política de erros. Contar apenas conexões simultâneas descreve ocupação, não trabalho útil.
+        contentBlocks:
+          - type: comparison-block
+            title: O que cada aumento tenta resolver
+            columns:
+              - title: Mais concorrência
+                items:
+                  [
+                    Ocupa esperas de I/O,
+                    Exige limites de memória e conexões,
+                    Pode aumentar fila e contenção,
+                  ]
+              - title: Mais paralelismo
+                items:
+                  [
+                    Distribui trabalho independente,
+                    Exige CPU ou consumidores adicionais,
+                    Não remove uma região crítica compartilhada,
+                  ]
+  - id: taxas-e-latencia
+    name: Taxas, latência e filas
+    entries:
+      - title: Throughput e latência medem coisas diferentes
+        description: >-
+          Latência é duração por operação, como milissegundos por requisição. Throughput, ou vazão, é trabalho concluído por intervalo, como alterações por segundo. Uma importação pode ter boa vazão e péssima latência individual; uma interface pode responder rápido com poucos usuários e saturar com muitos. Defina a fronteira medida: duração no banco exclui fila no pool e tráfego entre cliente e API. Compare percentis sobre uma janela e população explícitas. p99 de 800 ms significa que aproximadamente 99% das observações dessa amostra ficaram até esse valor; não significa que todas as pessoas verão 800 ms a cada cem cliques. Médias escondem caudas e não podem ser usadas para reconstruir percentis. Registre também erros e timeouts para não medir apenas os pedidos que sobreviveram.
+        tags: [latência, throughput, vazão, p95, p99]
+      - title: Little ajuda a verificar se as unidades fazem sentido
+        description: >-
+          Em um sistema estável, a quantidade média de trabalho em andamento L se relaciona à taxa média de conclusão λ e ao tempo médio no sistema W por L = λ × W. Se passam 200 requisições por segundo e a duração média total é 0,15 segundo, existem em média 30 requisições dentro da fronteira medida. Não substitua W por p99 e não use a fórmula como limite rígido de threads. Ela relaciona médias sob condições de estabilidade. Quando a entrada supera permanentemente a saída, a fila cresce e essa fotografia deixa de representar um regime sustentável. Use a conta para procurar inconsistências entre métricas: 20 conexões não podem sustentar 500 consultas por segundo se cada conexão fica ocupada, em média, durante um segundo por consulta.
+        code: |-
+          const conclusoesPorSegundo = 200;
+          const tempoMedioEmSegundos = 0.15;
+          console.log(conclusoesPorSegundo * tempoMedioEmSegundos);
+        output: "30"
+      - title: Uma fila compra tempo, não capacidade infinita
+        description: >-
+          Se chegam 500 eventos por segundo e o consumidor processa 350, o saldo aumenta 150 por segundo. Em dez minutos, são 90 mil eventos adicionais, ignorando variação. Depois que a entrada cai para 200 e a saída permanece em 350, a folga de 150 por segundo drena esse saldo em mais dez minutos. O atraso real de uma mensagem depende de posição, distribuição de tempo de serviço e prioridade; dividir backlog por taxa é uma aproximação útil em condições homogêneas. Backpressure é o mecanismo que faz a restrição retornar ao produtor: limitar admissão, pausar leitura ou reduzir concorrência. Sem limite, a fila migra para memória, disco, conexões ou retries e continua consumindo recursos. Defina o que rejeitar quando o orçamento acabar.
+        contentBlocks:
+          - type: exercise
+            prompt: A entrada é 900 eventos/s por 5 minutos e o consumidor entrega 600 eventos/s. Depois entram 300/s. Qual backlog foi criado e quanto tempo leva para drená-lo, mantendo 600/s de saída?
+            answer: O déficit é 300/s durante 300 s, formando 90.000 eventos. Depois há 300/s de capacidade livre, então a drenagem leva 300 s. A resposta supõe fila inicialmente vazia, eventos de custo semelhante e ausência de falhas; não é uma previsão de p99.
+            rubric:
+              - Usa a diferença entre entrada e saída, com unidades.
+              - Calcula a drenagem com capacidade residual, e não com a saída inteira.
+              - Explicita as hipóteses do modelo.
+  - id: capacidade
+    name: Contas de capacidade reproduzíveis
+    entries:
+      - title: Um milhão por dia não é um milhão por segundo
+        description: >-
+          Divida o volume por 86.400 segundos para obter a taxa média diária. Mil alterações por dia equivalem a aproximadamente 0,0116/s; um milhão, 11,57/s; cem milhões, 1.157,41/s. Nenhuma dessas médias informa sozinha o pico. Se todo o trabalho ocorre em oito horas, a média da janela ativa triplica. Atualizações repetidas de uma linha geram operações sem aumentar a quantidade de registros na mesma proporção. Um estoque de cem milhões de linhas consultado poucas vezes por hora apresenta desafios diferentes de cem milhões de escritas diárias sobre um pequeno conjunto de chaves. Antes de discutir sharding, descubra volume retido, taxa de operações, distribuição temporal, tamanho das mensagens e padrão de acesso.
+        code: |-
+          for (const porDia of [1_000, 1_000_000, 100_000_000]) {
+            console.log(`${porDia}: ${(porDia / 86400).toFixed(4)}/s`);
+          }
+        output: |-
+          1000: 0.0116/s
+          1000000: 11.5741/s
+          100000000: 1157.4074/s
+      - title: Construa uma estimativa e depois tente refutá-la
+        description: >-
+          Hipótese de laboratório: cem milhões de eventos por dia, pico dez vezes maior que a média, payload de 1.000 bytes e retenção de sete dias. A entrada lógica média é 100 GB/dia em unidades decimais; o pico é aproximadamente 11.574 eventos/s ou 11,57 MB/s de payload. Sete dias exigem 700 GB lógicos antes de índices, metadados, compressão, logs e cópias. Três cópias completas somariam 2,1 TB de payload, mas isso não prevê a ocupação física real. Amplificação de escrita mede bytes efetivamente escritos em relação aos bytes lógicos; deve ser medida no recurso e intervalo definidos. Se a hipótese experimental for fator quatro, estime 400 GB/dia de escrita nesse recurso, sem multiplicar cegamente fatores que já incluem replicação. Separe dado medido, parâmetro escolhido e resultado calculado.
+        tags:
+          [capacity planning, pico, write amplification, armazenamento, GB, TB]
+      - title: O limite pode estar em uma chave
+        description: >-
+          Distribuir requisições entre dez processos só ajuda se o trabalho puder ser distribuído depois deles. Um contador global atualizado dentro de uma transação, uma partição que recebe todos os eventos recentes ou um cliente responsável por metade do tráfego podem formar um hot spot. A taxa total aparentemente baixa esconde pressão localizada. Investigue frequência por chave, tempo de lock, tamanho dos lotes e custo de cada consulta. Batching reduz overhead por item, mas aumenta a duração da transação e o custo de repetir um lote. Um pool limita concorrência sobre o banco; aumentá-lo sem medir pode reduzir vazão. Um teste de capacidade precisa representar a distribuição real das chaves e medir saturação, cauda, rejeição e tempo de recuperação após o pico.
+        contentBlocks:
+          - type: checklist-block
+            title: Antes de propor mais máquinas
+            items:
+              - Defina o workload e a mistura de operações, inclusive falhas.
+              - Meça o gargalo por recurso, chave e etapa do caminho.
+              - Teste carga sustentada, pico, longa duração e recuperação.
+              - Mantenha margem operacional e um critério explícito de saturação.
+  - id: estado-e-falhas
+    name: Estado, sincronismo e falhas parciais
+    entries:
+      - title: Stateless significa que uma instância pode ser substituída
+        description: >-
+          Um serviço stateless não depende de estado exclusivo daquela instância para atender a próxima requisição. Isso não significa ausência de estado no sistema. Sessões, arquivos, idempotência e registros de negócio ainda precisam morar em algum lugar. Se a API guarda a única confirmação de um trabalho na memória, reiniciá-la perde informação necessária e revela uma dependência stateful. Estado traz responsabilidades: persistência, concorrência, replicação, migração e restauração. Antes de executar dez réplicas, teste se qualquer uma pode receber uma repetição de requisição. Um volume persistente protege dados contra o encerramento de um processo sob certas condições; não substitui um protocolo de banco, cópias independentes ou testes de recuperação.
+        tags: [stateful, stateless, sessão, persistência]
+      - title: Assíncrono desloca a espera e exige um contrato
+        description: >-
+          Em uma interação síncrona, o chamador aguarda o resultado daquela etapa. Em uma interação assíncrona, o resultado pode chegar depois por outro caminho. Nenhum dos modelos determina sozinho se existe persistência, fila ou paralelismo. Uma API pode retornar um identificador de operação e permitir consulta de estado; precisa distinguir recebido, em processamento, concluído e falhou. O usuário deve saber se pode repetir o pedido. Uma arquitetura com banco e broker passa a lidar com confirmação parcial: gravar no primeiro e cair antes de publicar no segundo cria uma lacuna. A solução não é chamar dois serviços mais rapidamente. Mais adiante, transactional outbox e CDC tornarão essa fronteira explícita e recuperável.
+        tags: [síncrono, assíncrono, estado da operação, dual write]
+      - title: Timeout significa que a resposta não chegou a tempo
+        description: >-
+          Um prazo expirado informa uma observação do cliente. A execução pode ter falhado, estar em andamento ou ter terminado com resposta perdida. Repetir sem identidade pode duplicar um débito ou um chamado. Cancelar a requisição também não garante que o servidor interrompeu todo efeito. Para uma operação mutável, associe uma chave estável ao pedido e consulte ou reutilize seu resultado. Para leituras, defina limites de repetição e orçamento de tempo total. Redes podem falhar em uma direção, uma dependência pode estar lenta enquanto outra funciona e o relógio de duas máquinas pode divergir. Investigue falhas parciais por evidências e estado durável; a existência de um processo vivo não prova que seu serviço consegue cumprir o contrato.
+        contentBlocks:
+          - type: exercise
+            prompt: O cliente recebeu timeout ao criar um chamado. O log da API registra commit e nenhuma resposta enviada. O cliente deve criar outro identificador e repetir? Qual informação falta?
+            answer: Deve primeiro recuperar o resultado pelo mesmo identificador idempotente. Commit no log sugere persistência, mas confirme a identidade e o registro no banco; logs podem estar incompletos. Uma nova identidade pode criar outro chamado. O contrato precisa definir retenção da chave e como detectar reutilização com payload diferente.
+            rubric:
+              - Diferencia falha de transporte de resultado de negócio.
+              - Usa identidade durável para reconciliar a repetição.
+              - Explica por que um log isolado não encerra a investigação.
+  - id: garantias
+    name: Garantias e critérios de conclusão
+    entries:
+      - title: Faça perguntas separadas sobre o mesmo sistema
+        description: >-
+          Durabilidade pergunta se uma escrita confirmada sobrevive às falhas consideradas. Consistência de leitura pergunta quais versões uma operação pode observar. Disponibilidade pergunta se uma operação válida pode ser atendida nas condições do contrato. Escalabilidade pergunta como custo e capacidade mudam quando cresce o trabalho. Essas propriedades se influenciam, mas nenhuma substitui as demais. Um backup pode permitir recuperar dados e ainda levar horas para restaurar; uma réplica pode responder imediatamente e conter uma versão atrasada. Declare o domínio de falha: processo, máquina, disco, zona ou região. Uma avaliação útil de arquitetura apresenta comportamento normal, falha, recuperação e custo de operação. Ao concluir este capítulo, você deve conseguir anotar essas quatro situações no desenho inicial sem depender de nomes de produtos.
+        contentBlocks:
+          - type: reference-card
+            title: Evidência para avançar
+            items:
+              - Desenhe uma gravação e marque onde ficam o estado e as confirmações.
+              - Refaça a conta de 100 milhões/dia para uma janela ativa de oito horas.
+              - Explique como backlog e latência mudam quando a entrada supera a saída.
+              - Descreva uma repetição segura depois de uma resposta perdida.
+          - type: sources
+            title: Referências e aprofundamento
+            items:
+              - label: CMU 15-445/645 — escopo de storage, execução e transações
+                url: https://15445.courses.cs.cmu.edu/fall2025/
+              - label: Linux Kernel — processos e controle de recursos com cgroup v2
+                url: https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
+              - label: Google SRE — sobrecarga, admissão e limites por recurso
+                url: https://sre.google/sre-book/handling-overload/
+              - label: PostgreSQL 17 — atividade, espera e estatísticas do banco
+                url: https://www.postgresql.org/docs/17/monitoring-stats.html

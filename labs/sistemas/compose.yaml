@@ -1,0 +1,82 @@
+name: devdocs-sistemas
+services:
+  db:
+    image: postgres:17.11
+    environment:
+      POSTGRES_USER: lab
+      POSTGRES_PASSWORD: lab-local-only
+      POSTGRES_DB: erp
+    command:
+      [
+        postgres,
+        -c,
+        wal_level=logical,
+        -c,
+        max_replication_slots=4,
+        -c,
+        max_wal_senders=4,
+        -c,
+        max_slot_wal_keep_size=512MB,
+      ]
+    ports: ["127.0.0.1:55432:5432"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./sql:/lab:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U lab -d erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  kafka:
+    image: apache/kafka:3.9.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_LOG_RETENTION_HOURS: 24
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes: [kafka-data:/tmp/kraft-combined-logs]
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+  connect:
+    image: quay.io/debezium/connect:3.3.1.Final
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: devdocs-connect
+      CONFIG_STORAGE_TOPIC: devdocs-connect-configs
+      OFFSET_STORAGE_TOPIC: devdocs-connect-offsets
+      STATUS_STORAGE_TOPIC: devdocs-connect-status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    ports: ["127.0.0.1:58083:8083"]
+    depends_on:
+      db: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+volumes:
+  pg-data:
+  kafka-data:

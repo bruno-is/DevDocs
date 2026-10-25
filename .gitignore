@@ -28,3 +28,11 @@ Thumbs.db
 
 # pagefind output inside public (generated)
 public/pagefind/
+
+# artefatos dos laboratórios (somente fontes entram no pacote)
+__pycache__/
+*.pyc
+public/labs/sistemas.zip
+labs/sistemas/.lab-*/
+.qa/
+.playwright-mcp/

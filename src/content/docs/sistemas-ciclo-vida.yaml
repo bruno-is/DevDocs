@@ -1,0 +1,185 @@
+id: sistemas-ciclo-vida
+title: "Ciclo de vida, histórico e camadas de dados"
+subtitle: "Manter o operacional enxuto sem perder a capacidade de consultar, comprovar, recuperar e excluir informações."
+cardDescription: "Hot, warm, cold, OLTP/OLAP, pipelines incrementais, arquivamento e reidratação."
+tech: sistemas
+order: 80
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: "Ciclo de vida e analytics"
+  level: avancado
+  prerequisites: [sistemas-cdc, sistemas-modelagem]
+  objectives:
+    - "Projetar camadas por padrão de acesso e objetivo de recuperação, sem confundir arquivo com backup."
+    - "Demonstrar completude antes de retirar dados da camada operacional."
+    - "Calcular custo e capacidade incluindo consultas, reidratação, metadados e políticas de exclusão."
+sections:
+  - id: temperaturas
+    name: "Temperatura depende da pergunta"
+    entries:
+      - title: "Hot data, hot storage e hot path"
+        description: >-
+          Hot data descreve informação frequentemente acessada num contexto; hot storage descreve uma camada com acesso compatível com baixa latência; hot path é um caminho crítico da aplicação. Um pedido de ontem pode estar quente para atendimento e frio para um modelo que só lê o fechamento mensal. Uma tabela histórica raramente consultada pode continuar no mesmo banco, em partições e índices adequados. Não existem duas instâncias obrigatórias chamadas hot e cold. Especifique frequência, seletividade, latência aceitável, atualização, prazo de retenção e objetivo de recuperação de cada conjunto. Esses contratos orientam a escolha entre memória, banco operacional, índice analítico, armazenamento de objetos e classes de arquivo que exigem recuperação prévia.
+        tags:
+          [hot data, warm data, cold data, armazenamento, retencao, historico]
+      - title: "Cache é uma cópia com regras de validade"
+        description: >-
+          Um cache atende leituras reutilizando um resultado ou estado já calculado. Sua validade depende de chave, TTL, invalidação e tolerância a divergência. Um warehouse pode ser a fonte autoritativa de um relatório consolidado, não apenas um cache. Um arquivo pode ser o único exemplar histórico ainda retido, tornando sua integridade e recuperabilidade críticas. Antes de retirar dados de um banco, determine onde a autoridade passa a residir e quem decide correções. Redis com expiração não cria automaticamente uma camada histórica; um dado que expira pode desaparecer exatamente quando seria necessário recuperar. Dados derivados precisam de estratégia de reconstrução, enquanto dados autoritativos precisam de proteção e teste de leitura independentes.
+      - title: "O mapa de acesso antecede a ferramenta"
+        description: >-
+          Num ERP fictício, atendimento consulta pedidos recentes por identificador e cliente, financeiro agrega fechamentos por mês e auditoria pede um conjunto antigo esporadicamente. A primeira consulta exige resposta rápida e atualização frequente; a segunda lê muitas linhas e poucas colunas; a terceira admite espera se existir prazo de recuperação combinado. Uma solução inicial pode manter pedidos recentes no PostgreSQL, fechamentos consolidados em tabelas de leitura e exportações históricas verificadas em objetos. Adicionar outro banco só se justifica quando uma carga ou requisito não é bem atendido pelas opções existentes. Registre também quem acessa cada camada e como uma alteração ou exclusão percorre suas cópias.
+        contentBlocks:
+          - type: comparison-block
+            title: "Contrato de acesso do cenário fictício"
+            columns:
+              - title: "Operacional"
+                items:
+                  [
+                    "Pedido por ID; atualizações concorrentes",
+                    "Latência interativa e invariantes transacionais",
+                    "Índices sobre o conjunto ativo",
+                  ]
+              - title: "Analítico"
+                items:
+                  [
+                    "Agregações de meses ou anos",
+                    "Varreduras seletivas por colunas",
+                    "Frescor explicitado no relatório",
+                  ]
+              - title: "Arquivo"
+                items:
+                  [
+                    "Consulta esporádica por período",
+                    "Recuperação com prazo e autorização",
+                    "Manifesto, integridade e formato legível",
+                  ]
+  - id: analytics
+    name: "Transações, análises e formatos"
+    entries:
+      - title: "OLTP e OLAP otimizam trabalho diferente"
+        description: >-
+          OLTP costuma executar transações curtas sobre poucas entidades, com latência e concorrência importantes. OLAP costuma agregar muitas linhas para responder perguntas históricas, com throughput de varredura e organização colunar relevantes. Esses são padrões de carga, não caixas exclusivas por produto. Um relatório pesado no primary pode disputar CPU, memória, I/O e cache com pedidos; uma réplica pode isolar parte do custo, mas acrescenta atraso e ainda precisa aplicar mudanças. Uma projeção agregada reduz trabalho por consulta ao preço de processamento e reconciliação. Meça antes de criar uma plataforma analítica separada. A separação é útil quando oferece isolamento e modelo adequados, com um contrato claro sobre quando os números ficam completos.
+      - title: "Warehouse, lake e lakehouse"
+        description: >-
+          Um warehouse organiza dados para consulta analítica e governança, normalmente com schema e processamento próprios. Um data lake mantém conjuntos em arquivos e objetos, podendo guardar dados brutos e curados em formatos diferentes. Sem catálogo, qualidade e políticas, acumular arquivos só dificulta encontrar uma versão confiável. Arquiteturas chamadas lakehouse acrescentam mecanismos de tabela, snapshots, transações e evolução sobre arquivos, frequentemente com formatos como Iceberg. Elas não eliminam compactação, gestão de metadados, manutenção ou compatibilidade dos motores de leitura. Para um relatório diário simples, um pipeline batch e tabelas agregadas podem ser suficientes. Escolha a menor arquitetura que consiga comprovar dados corretos, acesso autorizado e recuperação dentro do prazo exigido.
+      - title: "Parquet economiza leitura por coluna, não resolve tudo"
+        description: >-
+          Um arquivo colunar organiza valores da mesma coluna juntos e permite compressão e leitura seletiva. Parquet pode reduzir I/O quando a consulta usa poucas colunas de muitas linhas; atualizar uma única entidade não possui o mesmo perfil de um banco transacional. Particionar por data pode evitar ler períodos desnecessários, mas criar milhares de arquivos minúsculos aumenta requisições e planejamento. Arquivos muito grandes dificultam pequenas correções e paralelismo; a escolha depende do motor e do acesso. JSONL oferece inspeção e streaming simples para um laboratório pequeno, com mais volume e menos eficiência analítica. Preserve schema, unidades, timezone e versão do formato, porque um arquivo íntegro pode continuar semanticamente impossível de interpretar anos depois.
+  - id: incrementais
+    name: "Pipelines e fechamento do passado"
+    entries:
+      - title: "ETL e ELT descrevem onde transformar"
+        description: >-
+          Extract, Transform, Load transforma antes de carregar no destino final; Extract, Load, Transform usa a capacidade do destino para transformar depois da carga. Ambos precisam de validação, rastreabilidade, proteção e recuperação. Guardar uma cópia bruta facilita investigar erros de transformação, mas amplia exposição e retenção de dados pessoais. Um pipeline incremental processa o que mudou desde um ponto conhecido. Esse ponto pode ser uma posição de CDC, um lote fechado ou outro marcador com garantias demonstradas. Só usar o maior updated_at pode perder transações tardias e exclusões. Registre origem, corte, versão da transformação, contagens e resultado de verificações como parte do lote, não num comentário que ninguém consegue consultar depois.
+      - title: "Event time e processing time mudam os números"
+        description: >-
+          Event time é o instante atribuído ao fato no domínio; processing time é quando uma etapa o processa. Um pedido de ontem pode chegar hoje após uma integração voltar. Se o relatório agrupa apenas pela hora de processamento, pode deslocar receita para o dia errado. Se usa hora do fato, precisa lidar com atrasos, correções e relógios da origem. Um watermark de stream processing expressa uma hipótese de progresso para finalizar janelas, não uma prova de que nenhum evento anterior chegará. Defina uma política de atraso tolerado, correção e publicação de versão revisada. Um total deve informar seu corte e estado de completude para que alguém não compare um período aberto com outro já conciliado.
+      - title: "O destino precisa entender updates e deletes"
+        description: >-
+          Um pipeline append-only que só acrescenta snapshots pode contar o mesmo pedido várias vezes depois de updates. Uma projeção do estado atual pode usar chave e versão para substituir o registro; uma tabela histórica pode registrar intervalos de validade e preservar mudanças. A escolha depende da pergunta: saber o status atual difere de saber o que se acreditava na data do fechamento. Deletes também precisam de uma representação e política. Um evento de exclusão ignorado mantém dados removidos vivos no índice e nos relatórios. Reconcilie por períodos e invariantes além de contagem: duas bases podem ter o mesmo número de linhas, mas identificadores e valores diferentes. Detectar divergência cedo reduz o custo de reconstrução.
+  - id: arquivamento
+    name: "Arquivar sem uma janela de perda"
+    entries:
+      - title: "O protocolo é copiar, comprovar e só então retirar"
+        description: >-
+          Selecione um conjunto que possa ser fechado, como pedidos finalizados antes de um corte, e explique como tratar correções tardias. Exporte uma visão consistente, produza manifesto e verifique leitura, schema, contagem, chaves e integridade. Publique o catálogo do arquivo e teste a consulta ou reidratação. Somente depois remova ou destaque a origem conforme um procedimento revisado. Copiar e apagar em operações independentes deixa uma janela: uma alteração entre elas pode não estar no arquivo. Soluções incluem imutabilidade do período, bloqueio controlado, CDC de acompanhamento e reconciliação antes da retirada. Escolha o mecanismo pelo custo e pelo domínio. Um checksum comprova bytes; não prova que a seleção continha todas as linhas necessárias.
+        contentBlocks:
+          - type: diagram
+            caption: "A retirada depende de evidência de completude e de recuperação."
+            nodes:
+              - label: "Definir o corte"
+                detail: "Conjunto fechado ou protocolo para alterações concorrentes."
+              - label: "Exportar e manifestar"
+                detail: "Identidade do lote, schema, contagem, chaves e checksums."
+              - label: "Validar e consultar"
+                detail: "Testar conteúdo, autorização e recuperação numa cópia isolada."
+              - label: "Trocar o caminho de acesso"
+                detail: "Atualizar catálogo e confirmar que a aplicação encontra o histórico."
+              - label: "Retirar com política"
+                detail: "Aplicar retenção aprovada e conservar evidências do procedimento."
+      - title: "Partições simplificam manutenção quando o corte combina"
+        description: >-
+          Se a retenção é mensal e o acesso filtra por data, partições por intervalo podem tornar remoção e manutenção mais previsíveis. No PostgreSQL, limites de intervalo incluem o início e excluem o fim. O planejamento precisa cobrir unicidade, índices, criação das próximas partições e consultas sem filtro na chave. Destacar ou apagar uma partição altera disponibilidade e pode exigir locks; não é uma operação isenta de impacto. Uma partição que contém dados sujeitos a políticas diferentes pode não poder ser retirada inteira. A chave temporal escolhida também importa: data de criação não equivale a data de conclusão. Antecipe o destino das linhas ainda abertas antes de automatizar retenção por calendário.
+        code: |-
+          CREATE TABLE historico_eventos (
+            ocorrido_em timestamptz NOT NULL,
+            evento_id uuid NOT NULL,
+            payload jsonb NOT NULL,
+            PRIMARY KEY (ocorrido_em, evento_id)
+          ) PARTITION BY RANGE (ocorrido_em);
+
+          CREATE TABLE historico_eventos_2026_10
+          PARTITION OF historico_eventos
+          FOR VALUES FROM ('2026-10-01T00:00:00Z')
+                       TO ('2026-11-01T00:00:00Z');
+        callout:
+          type: hint
+          label: "Exemplo de DDL, sem descarte"
+          text: "Use um banco descartável PostgreSQL 17. A chave inclui a coluna de particionamento; esse exemplo não garante unicidade global de evento_id isoladamente nem instala uma rotina automática de arquivamento."
+      - title: "Manifesto é o contrato de leitura do arquivo"
+        description: >-
+          O manifesto identifica lote, seleção, corte, schema, objetos, contagem e checksums. Inclua versão do produtor, compressão, timezone e a regra que define completude. Uma lista de arquivos sem esse contexto não explica se uma parte faltou ou se duas exportações se sobrepõem. Preserve catálogo e chaves de criptografia com proteção e recuperação adequadas: perder metadados ou acesso às chaves pode tornar objetos existentes inutilizáveis. Faça leitura amostral e verificações integrais proporcionais ao risco, incluindo soma de valores relevantes e extremos de identificadores. Para mudanças concorrentes, registre até qual posição a reconciliação foi aplicada. O status concluído deve resultar dessas verificações, não apenas do upload retornar sucesso.
+  - id: recuperacao
+    name: "Custo, reidratação e retenção"
+    entries:
+      - title: "O custo inclui voltar a ler"
+        description: >-
+          Considere, como hipótese de planejamento, 10 milhões de registros por dia com payload médio de 500 bytes: 5 GB decimais por dia, 150 GB em 30 dias e 1,825 TB em 365 dias. Isso exclui índices, versões, logs, metadados, réplicas e compressão. A taxa média é aproximadamente 116 registros por segundo, antes dos picos; grande volume acumulado não demonstra alto throughput. Multiplique tamanhos medidos por retenção e cópias e some requisições, transferência, consultas e recuperação. Uma classe barata por GB pode ter prazo mínimo, cobrança de restauração ou espera incompatível com o atendimento. Compare cenários de acesso com frequências plausíveis, sem tratar preço atual de um provedor como constante do currículo.
+      - title: "Reidratar é um processo com prazo e integridade"
+        description: >-
+          Reidratação torna dados arquivados novamente acessíveis numa camada de trabalho. Algumas classes de arquivo de objetos exigem solicitar recuperação e aguardar; outras oferecem acesso imediato com características de custo diferentes. Defina quem autoriza, qual conjunto será recuperado, tempo máximo, local temporário e prazo de expiração da cópia. Depois da restauração, confira checksums, schema, chaves e controles de acesso antes de importar. Importe preferencialmente em ambiente isolado para não colidir com dados ativos ou reenviar eventos antigos por acidente. Se a aplicação precisar consultar histórico, exponha o estado aguardando_recuperacao em vez de prometer a mesma latência do dado ativo. Teste o prazo com amostras representativas e inclua falha parcial do processo.
+      - title: "Arquivo, backup e disaster recovery"
+        description: >-
+          Arquivo suporta conservação e acesso de longo prazo conforme uma política; backup permite recuperar um estado após perda ou corrupção. Um conjunto de arquivos históricos pode não conter índices, permissões, schemas e transações necessárias para reconstruir o banco. Uma réplica pode propagar exclusões incorretas rapidamente e também não substitui backup. Para o operacional, defina RPO e RTO e teste restore e point-in-time recovery com seus logs. Para o arquivo, teste disponibilidade de objetos, catálogo, formato e chaves. Para o pipeline, teste reconstrução e reconciliação. Esses três exercícios se complementam. Recuperar só os servidores não comprova que o conjunto de dados que o negócio precisa continua correto.
+      - title: "Retenção é uma política por finalidade"
+        description: >-
+          A política precisa identificar categoria de dados, finalidade, responsáveis, período, exceções, base aplicável e forma de comprovar execução. Na LGPD, necessidade, finalidade e hipóteses de conservação importam; não existe um prazo universal de cinco anos para todos os dados. A implementação deve seguir requisitos definidos com os responsáveis jurídicos e de privacidade para aquele tratamento. Mapear cópias inclui bancos, índices, caches, logs, filas, arquivos e backups. Exclusão na origem não garante remoção imediata nas demais camadas. Mantenha evidência técnica de solicitações e cumprimento, respeitando limites de exposição. Pseudonimizar um identificador não equivale automaticamente a anonimização, especialmente quando outras informações permitem reidentificação.
+        callout:
+          type: warn
+          label: "Política do caso de estudo"
+          text: "Os períodos usados nos exercícios são hipóteses educacionais. A organização deve estabelecer os requisitos aplicáveis ao seu tratamento; o capítulo não determina prazos legais."
+  - id: avaliacao
+    name: "Exercícios, prática e referências"
+    entries:
+      - title: "Escolher a evidência antes de automatizar"
+        contentBlocks:
+          - type: exercise
+            prompt: "Uma exportação de outubro terminou e seu checksum confere. Um pedido de outubro foi corrigido enquanto o arquivo era enviado. É seguro apagar a partição operacional?"
+            answer: "Não apenas com essa evidência. O checksum confirma os bytes exportados, não a cobertura das alterações posteriores ao corte. É necessário demonstrar que o período era imutável ou reconciliar as mudanças por um mecanismo como CDC, repetir a exportação com corte consistente ou aplicar um bloqueio controlado. Depois, validar completude, testar acesso ao arquivo e somente então autorizar a retirada segundo a política. Se a partição contém pedidos ainda abertos, eles precisam de tratamento separado."
+            rubric:
+              [
+                "Distinguir integridade de bytes de completude lógica",
+                "Tratar alterações concorrentes",
+                "Exigir acesso testado antes da retirada",
+              ]
+          - type: exercise
+            prompt: "A consulta histórica precisa responder em 10 segundos, mas a classe de arquivo escolhida exige uma etapa prévia de recuperação. Que alternativas atendem o requisito?"
+            answer: "Manter o subconjunto consultável em classe com acesso imediato, materializar um resumo ou índice suficiente, ou renegociar explicitamente o contrato para uma consulta assíncrona com recuperação. Um cache só ajuda se sua cobertura e comportamento de miss forem compatíveis com o requisito. Compare custo total, frequência e seletividade; não prometa 10 segundos para dados que precisam ser restaurados antes de ler."
+            rubric:
+              [
+                "Identificar incompatibilidade de latência",
+                "Propor alternativa com cobertura demonstrada",
+                "Incluir cache miss e custo de recuperação",
+              ]
+          - type: reference-card
+            title: "Prática acompanhada"
+            links:
+              - label: "Laboratórios da formação: observe o pipeline e registre evidências"
+                doc: sistemas-laboratorios
+      - title: "Fontes para conferir armazenamento e políticas"
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "PostgreSQL 17 — particionamento declarativo e manutenção"
+                url: "https://www.postgresql.org/docs/17/ddl-partitioning.html"
+              - label: "Apache Parquet — formato colunar e implementações"
+                url: "https://parquet.apache.org/docs/overview/"
+              - label: "Apache Iceberg — especificação de tabelas, snapshots e metadados"
+                url: "https://iceberg.apache.org/spec/"
+              - label: "Amazon S3 — regras de ciclo de vida"
+                url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html"
+              - label: "Amazon S3 — recuperação de objetos arquivados"
+                url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects.html"
+              - label: "LGPD — texto da Lei 13.709 no Planalto"
+                url: "https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709.htm"

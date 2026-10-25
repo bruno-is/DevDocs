@@ -1,0 +1,166 @@
+id: sistemas-formacao
+title: "Formação: Engenharia de Dados & Sistemas Distribuídos"
+subtitle: "Compreenda os mecanismos, faça experimentos e justifique decisões: do commit no banco à recuperação de uma plataforma cloud native."
+cardDescription: "Uma formação progressiva com mecanismos internos, falhas, laboratórios e projeto integrador."
+tech: sistemas
+order: 0
+readerLayout: narrative
+learning:
+  module: Orientação
+  kind: orientation
+  level: fundamentos
+  prerequisites: []
+  objectives:
+    - Explicar a sequência de dependências do currículo e escolher um ponto de entrada.
+    - Separar uma observação experimental de uma hipótese e de uma garantia de protocolo.
+    - Produzir evidências de aprendizagem e decisões arquiteturais revisáveis.
+sections:
+  - id: proposta
+    name: Como estudar esta formação
+    entries:
+      - title: Da API ao sistema que a sustenta
+        kicker: Público e conhecimentos prévios
+        description: >-
+          Esta formação foi escrita para quem já programa serviços, consulta bancos e usa Git e containers,
+          mas quer explicar o comportamento do sistema quando concorrência, crescimento e falhas aparecem.
+          É útil ter prática com SQL básico, HTTP, terminal e uma linguagem como PHP ou Go. Você não precisa
+          conhecer consenso, logs de replicação ou Kubernetes: esses conceitos são introduzidos antes de
+          serem usados. Se uma consulta SQL ou um processo de terminal ainda for novidade, revisite os guias
+          de banco e CLI da biblioteca antes do laboratório correspondente.
+        contentBlocks:
+          - type: reference-card
+            title: Preparação na biblioteca
+            links:
+              - label: Banco de dados com Go
+                doc: go-banco-dados
+              - label: Banco de dados com PHP
+                doc: php-banco-dados
+              - label: Concorrência em Go
+                doc: go-concorrencia
+              - label: Separação de responsabilidades
+                doc: arquitetura-clean-architecture
+      - title: Um percurso com dependências, não um catálogo de produtos
+        description: >-
+          Primeiro construímos um modelo de processos, recursos, filas e falhas. Depois acompanhamos dados
+          em páginas, índices, transações e logs. Só então discutimos replicação e comunicação entre serviços.
+          CDC depende desses mecanismos: sem entender commit, snapshot e cursor, é fácil confundir captura
+          de mudanças com uma entrega infalível. A operação em Kubernetes vem depois de consistência e
+          persistência porque um controlador de Pods não resolve os protocolos do banco. O último trecho
+          exige diagnosticar, recuperar e justificar a arquitetura inteira, incluindo seu custo.
+        contentBlocks:
+          - type: diagram
+            caption: "Mapa conceitual: cada etapa reutiliza mecanismos introduzidos nas anteriores. Os pré-requisitos específicos aparecem em cada capítulo."
+            nodes:
+              - label: Recursos e armazenamento
+                detail: "Processos, I/O, capacidade, páginas e índices explicam onde o trabalho acontece."
+              - label: Estado e coordenação
+                detail: "Invariantes, transações, recuperação, replicação e consenso delimitam o que uma confirmação significa."
+              - label: Propagação e ciclo de vida
+                detail: "Mensageria e CDC transportam mudanças; projeções e arquivamento exigem reconciliação e retenção."
+              - label: Operação e evidência
+                detail: "Containers, Kubernetes, observabilidade e recuperação permitem testar a arquitetura sob falha."
+  - id: metodo
+    name: Teoria, experimento e consulta
+    entries:
+      - title: Estudar em quatro movimentos
+        description: >-
+          Leia um capítulo tentando explicar o mecanismo com suas palavras. Antes de executar um comando,
+          escreva o resultado que espera e qual evidência poderia contrariá-lo. Execute o experimento com
+          dados sintéticos e registre versões, configuração, carga, métricas e resultado. Por fim responda
+          aos exercícios antes de abrir o gabarito e revise o modelo mental quando houver divergência.
+          O objetivo não é decorar a saída de uma ferramenta: é conseguir prever o próximo comportamento
+          e reconhecer os limites da previsão. Guarde planos de execução, linhas do tempo e decisões num
+          caderno versionado, sem credenciais ou dados reais.
+        contentBlocks:
+          - type: flow-steps
+            title: Registro mínimo de um experimento
+            steps:
+              - "Hipótese: declarar uma relação observável, por exemplo, o índice reduz páginas lidas para este filtro seletivo."
+              - "Controle: fixar dataset, versões, concorrência e consulta; registrar cache aquecido ou frio sem fingir que são equivalentes."
+              - "Observação: coletar plano, buffers, erros e tempo com repetições; distinguir média, distribuição e pico."
+              - "Interpretação: explicar o mecanismo e uma alternativa; propor o próximo teste que separa as hipóteses restantes."
+      - title: Dois modos para o mesmo conhecimento
+        description: >-
+          A leitura contínua é o padrão da formação. O índice lateral permite saltar para um tópico e cada
+          seção possui um endereço estável por hash. O seletor de leitura também oferece painéis, útil
+          quando você volta para consultar um comando. A busca começa no escopo Sistemas e pode ser
+          ampliada para toda a biblioteca. A sequência anterior/próximo segue a mesma ordem do mapa;
+          os links de pré-requisitos permitem voltar ao fundamento necessário. As marcações de estudo
+          ficam no navegador e servem para organização pessoal, sem avaliar competência ou emitir credenciais.
+      - title: Ritmo e critério de avanço
+        description: >-
+          A duração depende do seu domínio de SQL, Linux e investigação de falhas; por isso não tratamos
+          uma estimativa de horas como compromisso de formação. Avance quando conseguir explicar o fluxo
+          sem repetir o texto, resolver o exercício com suas premissas explícitas e interpretar a evidência
+          do laboratório. Se uma aula depender de infraestrutura indisponível, faça primeiro a análise
+          de falhas em papel e registre a execução como pendente. Ler uma configuração não equivale a
+          demonstrar que ela funciona. Volte ao experimento quando houver o ambiente necessário.
+  - id: conclusao
+    name: Evidências de conclusão
+    entries:
+      - title: O que entregar para si mesmo
+        description: >-
+          O projeto final usa um domínio fictício de atendimento operacional. Sua solução deve preservar
+          invariantes no banco, propagar alterações com recuperação e apresentar uma projeção verificável.
+          Desenhe o caminho de confirmação em cada fronteira: resposta HTTP, commit, captura, publicação,
+          processamento e leitura. Marque os pontos em que uma falha pode causar perda, duplicação ou
+          atraso. Uma arquitetura que usa menos componentes e consegue provar seus requisitos é uma
+          resposta válida; acrescentar Kafka, Redis ou Kubernetes sem um requisito não aumenta a qualidade.
+        contentBlocks:
+          - type: checklist-block
+            title: Portfólio técnico de conclusão
+            items:
+              - "Modelo de dados e invariantes: mostrar como concorrência preserva regras de negócio e como tratar conflitos."
+              - "Análise de capacidade: converter volume em taxa, estimar picos e armazenamento, declarar hipóteses e localizar o gargalo medido."
+              - "Pipeline recuperável: justificar cursor, idempotência, ordenação, retenção e reconciliação de projeções."
+              - "Runbook: detectar um sintoma, coletar evidências, mitigar, recuperar e verificar a integridade."
+              - "Restore ensaiado: registrar o tempo observado, o ponto recuperado e sua relação com RPO e RTO."
+              - "ADR de arquitetura: comparar pelo menos duas alternativas com custo, complexidade e consequências de falha."
+      - title: Uma decisão precisa ser refutável
+        description: >-
+          Um ADR (Architecture Decision Record) curto registra contexto, requisito, alternativas, decisão
+          e consequências. Em vez de escrever que uma tecnologia é escalável, defina a carga, o limite
+          observado e o que fará quando ele for alcançado. Em vez de prometer zero perda, descreva as
+          confirmações duráveis, o domínio de falhas e as condições que invalidam a promessa. Inclua uma
+          condição de revisão: por exemplo, reavaliar particionamento quando uma medição mostrar que a
+          manutenção da janela de retenção ultrapassa o orçamento operacional. Isso torna uma decisão
+          útil depois que o sistema e a equipe mudarem.
+        contentBlocks:
+          - type: exercise
+            title: Diagnóstico inicial
+            prompt: "Um ERP tem 100 milhões de alterações por dia e alguém recomenda sharding imediato. Quais informações faltam antes de aceitar a proposta?"
+            answer: >-
+              A média é aproximadamente 1.157 alterações por segundo, mas não determina a infraestrutura.
+              Faltam distribuição de picos, tamanho de cada alteração, índices, transações, hotspots, leituras,
+              retenção, latência alvo e recursos disponíveis. Peça medições de CPU, I/O, locks e planos,
+              estime amplificação de escrita e teste alternativas como índices, batching e particionamento
+              de retenção. Sharding é uma opção quando seus benefícios superam coordenação, rebalanceamento
+              e consultas entre shards; o volume diário isolado não demonstra isso.
+            rubric:
+              - Converte corretamente volume diário em taxa média e separa média de pico.
+              - Relaciona demanda lógica a trabalho físico, contenção e objetivos de serviço.
+              - Propõe uma medição ou experimento antes de escolher a arquitetura.
+  - id: fontes
+    name: Base editorial e escopo
+    entries:
+      - title: Rigor sem associação institucional
+        description: >-
+          A organização foi informada por currículos públicos de bancos e sistemas distribuídos, além
+          de documentação oficial versionada. As explicações são originais e não representam um curso,
+          certificado ou endosso dessas instituições. Cada capítulo reúne as fontes relevantes para
+          verificar detalhes e aprofundar mecanismos. PostgreSQL 17 e MySQL 8.4 são referências explícitas
+          para diferenças de implementação. Os arquivos dos laboratórios registram as imagens usadas e
+          seu status real de validação. A formação cobre engenharia de sistemas de dados; treinamento
+          de modelos de machine learning, administração completa de cada produto e implementação formal
+          de um protocolo de consenso ficam fora deste recorte.
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "CMU 15-445/645 — Database Systems, Fall 2025"
+                url: https://15445.courses.cs.cmu.edu/fall2025/
+              - label: "MIT 6.5840 — sequência de sistemas distribuídos, Spring 2026"
+                url: https://pdos.csail.mit.edu/6.5840/schedule.html
+              - label: "PostgreSQL 17 — documentação versionada"
+                url: https://www.postgresql.org/docs/17/
+              - label: "MySQL 8.4 — manual de referência"
+                url: https://dev.mysql.com/doc/refman/8.4/en/

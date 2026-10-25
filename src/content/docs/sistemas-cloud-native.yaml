@@ -1,0 +1,290 @@
+id: sistemas-cloud-native
+title: "Sistemas: containers e Kubernetes"
+subtitle: "Do processo isolado à reconciliação de um cluster — incluindo recursos, rede, estado e os limites da automação."
+cardDescription: "Containers, control plane, scheduling, Services, volumes e decisões sobre bancos no cluster."
+tech: sistemas
+order: 90
+readerLayout: narrative
+codeLanguage: yaml
+learning:
+  module: "Infraestrutura e operação"
+  level: intermediario
+  prerequisites: [sistemas-fundamentos, sistemas-replicacao]
+  objectives:
+    - "Explicar o caminho entre aplicar um Deployment e atender uma requisição."
+    - "Diagnosticar Pending, CrashLoopBackOff e ausência de endpoints por evidências."
+    - "Distinguir recriação de processos, persistência e alta disponibilidade de banco."
+    - "Justificar requests, probes e uma estratégia de execução de workloads stateful."
+sections:
+  - id: isolamento
+    name: "Containers começam em processos"
+    entries:
+      - title: "Imagem não é uma máquina em miniatura"
+        kicker: "A unidade que falha continua sendo um processo"
+        description: >-
+          Uma imagem reúne camadas de arquivos e metadados de execução. O runtime monta essas camadas,
+          acrescenta uma camada gravável e inicia um processo. No Linux, namespaces oferecem visões
+          separadas de recursos como processos, rede e mounts; cgroups contabilizam e limitam recursos.
+          Os containers compartilham o kernel do host: isolamento não equivale a executar um kernel
+          exclusivo. No Docker Desktop, os containers Linux normalmente vivem numa VM Linux, embora
+          o terminal esteja no Windows. Essa diferença explica caminhos, consumo de memória e latência
+          de bind mounts. Uma imagem imutável torna o artefato reproduzível; não torna imutáveis dados
+          gravados fora dela, DNS ou dependências externas.
+        tags: [container, namespaces, cgroups, kernel, imagem]
+      - title: "Dados sobrevivem conforme o armazenamento escolhido"
+        description: >-
+          Um processo pode reiniciar no mesmo container; o container pode ser substituído; o host pode
+          desaparecer. A camada gravável do container não é um contrato de persistência para todas
+          essas falhas. Um volume externaliza arquivos, mas sua sobrevivência depende do driver e do
+          domínio de falha. Colocar PostgreSQL num volume do mesmo notebook protege contra recriar
+          o container, não contra perder o notebook. Evite gravar uploads e estado de sessão na camada
+          efêmera de réplicas de API. Trate arquivos temporários como descartáveis e publique métricas
+          de espaço e inodes; disco cheio pode impedir tanto dados quanto logs de diagnóstico.
+        contentBlocks:
+          - type: comparison-block
+            title: "Três contratos diferentes"
+            columns:
+              - title: "Imagem"
+                items:
+                  [
+                    "Artefato para iniciar o processo.",
+                    "Versão e digest identificam o conteúdo.",
+                  ]
+              - title: "Volume"
+                items:
+                  [
+                    "Arquivos fora da camada efêmera.",
+                    "Durabilidade depende do armazenamento.",
+                  ]
+              - title: "Backup"
+                items:
+                  [
+                    "Cópia recuperável em outro domínio.",
+                    "Precisa de teste de restauração.",
+                  ]
+      - title: "Compose explicita dependências, mas não remove falhas"
+        description: >-
+          Compose descreve serviços, redes e volumes locais. Um container iniciado pode ainda não
+          aceitar conexões. Healthchecks e dependências por saúde ajudam o bootstrap; aplicações
+          também precisam reconectar quando uma dependência falha depois. Execute um único processo
+          principal por responsabilidade operacional, capture SIGTERM e feche conexões dentro de um
+          prazo. Não dependa de SSH para corrigir uma imagem em execução: reconstrua o artefato e
+          preserve os dados fora dele. No laboratório, Compose prepara o banco, o broker e o conector;
+          Kubernetes será estudado por outra necessidade: reconciliar estado desejado continuamente.
+        tags: [Docker, Compose, healthcheck, SIGTERM]
+  - id: control-plane
+    name: "O cluster como sistema de controle"
+    entries:
+      - title: "Declarar intenção não executa uma chamada remota síncrona"
+        description: >-
+          Ao aplicar um manifesto, o cliente envia uma representação de estado desejado ao API Server.
+          Autenticação, autorização e admission verificam a operação. O estado persistido permite que
+          controladores comparem desejo e realidade. Um Deployment conduz ReplicaSets; estes mantêm
+          Pods. O Scheduler escolhe nodes para Pods ainda sem destino. O kubelet de cada node usa o
+          runtime via CRI para iniciar containers e reportar condições. Não existe uma transação única
+          que cubra API, scheduler, rede, download de imagem e processo. A convergência leva tempo e
+          pode parar numa restrição insolúvel, como um pedido de memória que nenhum node comporta.
+        contentBlocks:
+          - type: diagram
+            caption: "Fluxo de reconciliação; as setas representam etapas, não um commit atômico."
+            nodes:
+              - label: "kubectl → API Server"
+                detail: "Valida e registra a intenção. etcd persiste o estado de controle."
+              - label: "Controllers → Pod desejado"
+                detail: "Deployment e ReplicaSet mantêm a quantidade especificada."
+              - label: "Scheduler → node"
+                detail: "Filtra e pontua destinos que satisfazem as restrições."
+              - label: "kubelet → runtime"
+                detail: "Prepara volumes/rede e inicia containers; reporta condições."
+              - label: "Service → endpoints prontos"
+                detail: "Clientes alcançam réplicas consideradas aptas para tráfego."
+      - title: "etcd guarda controle, não as tabelas da sua aplicação"
+        description: >-
+          O banco etcd sustenta informações da API do cluster. Os dados de negócio de um PostgreSQL
+          não passam a residir no etcd por executar num Pod. Proteger o control plane envolve backup
+          de etcd, disponibilidade do API Server e revisão das credenciais; proteger o banco exige sua
+          própria política. Uma indisponibilidade do API Server não mata obrigatoriamente todos os
+          processos existentes, mas impede ou atrasa mudanças e reconciliação. Um cluster com três
+          nodes de aplicação e control plane único tem um domínio de falha diferente de três membros
+          de consenso distribuídos entre zonas. Sempre desenhe onde estão os votos, dados e dependências.
+        tags: [etcd, control plane, kubelet, CRI, Scheduler]
+  - id: workloads-rede
+    name: "Workloads, identidade e rede"
+    entries:
+      - title: "Escolha o controlador pelo ciclo de vida"
+        description: >-
+          Deployment atende réplicas substituíveis de serviços; StatefulSet oferece identidade ordinal
+          e associação estável a volumes; DaemonSet acompanha nodes elegíveis, como agentes; Job
+          executa trabalho até conclusão e CronJob agenda Jobs. Um CronJob pode se sobrepor, atrasar ou
+          repetir trabalho sob certas falhas: a operação de negócio ainda precisa de idempotência.
+          StatefulSet não escolhe automaticamente um primary de PostgreSQL nem replica tabelas.
+          Um Operator acrescenta regras específicas de domínio por controladores e recursos customizados;
+          sua qualidade operacional deve ser avaliada por upgrade, fencing, restauração e falhas documentadas.
+        tags: [Deployment, StatefulSet, Job, CronJob, DaemonSet, Operator]
+      - title: "Service estabiliza descoberta, não uma conexão já quebrada"
+        description: >-
+          IPs de Pods mudam. Um Service fornece uma identidade para alcançar um conjunto de endpoints,
+          selecionados normalmente por labels. DNS resolve nomes; o dataplane encaminha tráfego conforme
+          a implementação. Readiness controla participação nos endpoints, não desfaz uma transação
+          que já estava em voo. Ingress e Gateway API tratam entrada e roteamento; exigem controladores
+          implementados no cluster. A simples criação do objeto não instala um balanceador universal.
+          Um Service sem endpoints pode indicar selector errado ou Pods não prontos. Um timeout com
+          endpoints presentes pede investigação de rede, políticas, porta e aplicação, nessa ordem de evidências.
+        codeLanguage: bash
+        code: |-
+          kubectl -n devdocs-lab get pods -o wide
+          kubectl -n devdocs-lab get services,endpointslices
+          kubectl -n devdocs-lab describe service echo
+      - title: "Um nome acessível não implica permissão irrestrita"
+        description: >-
+          NetworkPolicies expressam regras de tráfego quando o plugin de rede as implementa. RBAC
+          decide ações sobre a API; ServiceAccounts identificam workloads nessa API. São controles
+          distintos. Desabilite o token automático se o processo não usa Kubernetes. ConfigMaps guardam
+          configuração não secreta; Secrets exigem controle de acesso, rotação e proteção do armazenamento.
+          Base64 não é criptografia. Separe credenciais de leitura, escrita e replicação; evite montar
+          o mesmo segredo amplo em toda a aplicação. Um vazamento da conta do conector CDC pode expor
+          grande parte do histórico, mesmo que a API normal filtre cada requisição por tenant.
+        tags: [RBAC, ServiceAccount, NetworkPolicy, Secrets, ConfigMap]
+  - id: recursos-ciclo
+    name: "Recursos, saúde e terminação"
+    entries:
+      - title: "Requests são compromissos de scheduling"
+        description: >-
+          O scheduler usa requests para decidir se um Pod cabe; não espera observar o consumo de um
+          pico futuro. CPU pode sofrer throttling quando limitada; memória excedida pode resultar em
+          OOM kill. Há também pressão no node, page cache e recursos do sistema. Uma request de 100m
+          representa 0,1 CPU, não uma reserva de 100 milissegundos por requisição. Comece com medidas,
+          confira consumo e latência sob carga e ajuste. QoS e prioridades influenciam comportamento
+          sob pressão; não substituem capacidade física. Deixar requests irreais permite aparentar
+          alta densidade até uma falha simultânea ou pico transformar a promessa em contenção.
+        code: |-
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      - title: "Probes perguntam coisas diferentes"
+        description: >-
+          Startup concede tempo para inicialização. Readiness informa se a réplica deve receber
+          tráfego. Liveness identifica situações nas quais reiniciar o container ajuda. Colocar uma
+          consulta ao banco na liveness de todas as APIs pode criar uma tempestade de reinícios durante
+          falha do banco. A ausência de prontidão deve ser ponderada: retirar todas as réplicas por
+          uma dependência opcional pode piorar a disponibilidade. Use timeouts pequenos e limites
+          explícitos, mas compatíveis com o comportamento medido. Ao terminar, pare novas requisições,
+          drene as existentes, confirme ou devolva mensagens e finalize dentro do grace period.
+        tags: [startupProbe, readinessProbe, livenessProbe, graceful shutdown]
+      - title: "Autoscaling amplifica também dependências"
+        description: >-
+          O HPA ajusta réplicas conforme métricas e políticas; não cria throughput de escrita numa
+          hot row. Dez Pods com pool máximo de cinquenta conexões podem pedir quinhentas conexões ao
+          banco. Escalar consumidores além das partitions úteis também encontra limite. Faça um
+          orçamento de concorrência ponta a ponta: réplicas × pool, taxa de chegada, duração e
+          capacidade da dependência. Affinity, anti-affinity e topology spread ajudam a distribuir
+          réplicas, mas precisam caber em nodes realmente disponíveis. Um PDB limita certas disrupções
+          voluntárias; não promete impedir crash de node nem torna uma manutenção sempre executável.
+  - id: estado
+    name: "Persistência e bancos no cluster"
+    entries:
+      - title: "PV, PVC e StorageClass expressam uma negociação"
+        description: >-
+          Um PVC pede armazenamento com propriedades; o PV representa o recurso; a StorageClass
+          define provisionamento e parâmetros. Access mode não é protocolo de consenso: ReadWriteOnce
+          descreve restrições de montagem, não significa um único escritor lógico garantido em todas
+          as falhas. Investigue binding, topology, attach e política de reclaim. Um volume pode estar
+          preso a uma zona; reagendar o Pod em outra não transfere os bytes magicamente. Snapshots
+          do storage exigem consistência e estratégia de recuperação do SGBD; copiar arquivos abertos
+          sem protocolo pode produzir uma cópia inutilizável.
+        tags: [PersistentVolume, PVC, StorageClass, stateful, CSI]
+      - title: "A decisão inclui a equipe que vai restaurar às três da manhã"
+        description: >-
+          Um banco gerenciado externo reduz algumas tarefas de provisionamento, patches e backup,
+          mantendo responsabilidades por modelo, consultas, credenciais, custos e teste de restore.
+          Um banco no cluster pode oferecer portabilidade e automação coerente quando há equipe,
+          Operator maduro, armazenamento adequado e exercícios de falha. Compare custo total,
+          dependência do fornecedor, latência, RPO/RTO e competência disponível. A escolha não decorre
+          de “tudo precisa estar no Kubernetes”. Comece com o contrato de recuperação e verifique
+          se cada opção consegue cumpri-lo sob falha de disco, zona, credencial e erro humano.
+        contentBlocks:
+          - type: checklist-block
+            title: "Antes de operar estado"
+            items:
+              - "Identifique quem elege o primary e impede o anterior de escrever."
+              - "Meça recuperação com dados de tamanho representativo."
+              - "Separe backups do domínio e das credenciais do cluster."
+              - "Teste falta de espaço, attach lento e upgrade interrompido."
+  - id: entrega-diagnostico
+    name: "Entrega e diagnóstico"
+    entries:
+      - title: "Helm e GitOps organizam intenção, não validam negócio"
+        description: >-
+          Helm parametriza e empacota objetos; valores inadequados continuam produzindo objetos
+          inadequados. GitOps reconcilia uma versão declarada em Git e torna mudanças rastreáveis.
+          Rolling updates, canary e blue-green exigem compatibilidade entre versões, sessões e schemas.
+          Uma migration destrutiva não se torna reversível com rollback do Deployment. Expanda o schema,
+          publique leitores e escritores compatíveis, faça backfill observável e só depois remova o
+          legado. Cada etapa precisa de condição de avanço e reversão própria. Preserve uma imagem
+          anterior e evidências, sem confiar que a configuração anterior ainda entende os novos dados.
+      - title: "Leia condições e eventos antes de reiniciar"
+        description: >-
+          Pending pede eventos de scheduling, volumes e recursos. ImagePullBackOff pede nome, tag,
+          credenciais e acesso ao registry. CrashLoopBackOff pede exit code, logs anteriores, OOM e
+          configuração. Running sem tráfego pede readiness, selectors, endpoints e portas. Um restart
+          pode apagar a evidência ou mudar temporariamente o sintoma; registre a hipótese e compare
+          antes/depois. No laboratório, exclua réplicas echo e observe a reconciliação; depois preserve
+          um marker num PVC. São dois experimentos diferentes: o primeiro testa controlador; o segundo,
+          persistência contra recriação de um Pod específico.
+        codeLanguage: bash
+        code: |-
+          kubectl -n devdocs-lab describe pod POD
+          kubectl -n devdocs-lab logs POD --previous
+          kubectl -n devdocs-lab get events --sort-by=.metadata.creationTimestamp
+  - id: avaliacao
+    name: "Verificação e referências"
+    entries:
+      - title: "Mais Pods e escrita saturada"
+        contentBlocks:
+          - type: exercise
+            prompt: "Uma API passa de 4 para 20 Pods. O p99 piora, o banco tem 900 conexões e o throughput fica estável. Proponha investigação e contenção sem presumir que CPU é a causa."
+            answer: >-
+              Calcule o orçamento de pools e compare conexões ativas/ociosas, locks, tempo de queries,
+              espera por pool e saturação de I/O. O aumento pode ter ampliado filas e contenção numa
+              dependência fixa. Reduza concorrência de forma controlada, aplique limites e observe
+              p99/throughput. Se houver hot row, mudar o particionamento lógico do trabalho ou a regra
+              de atualização pode ajudar mais que réplicas. Só altere índices ou capacidade após medir.
+            rubric:
+              [
+                "Relacionar réplicas e pools.",
+                "Citar ao menos duas evidências do banco.",
+                "Definir contenção reversível e métrica de sucesso.",
+              ]
+          - type: exercise
+            prompt: "Um PostgreSQL em StatefulSet usa um PVC. O node desapareceu. O novo Pod ficou Pending. A equipe prometeu RTO de 30 segundos. O que a promessa omitiu?"
+            answer: >-
+              Faltam disponibilidade e topologia do volume, detach/attach, fencing do antigo escritor,
+              tempo de recuperação do banco e roteamento. StatefulSet garante identidade, não eleição
+              e cópia de dados. Investigue eventos e StorageClass, compare a recuperação medida ao RTO
+              e avalie réplica em domínio separado ou serviço gerenciado com contrato demonstrado.
+            rubric:
+              [
+                "Separar Pod, volume e banco.",
+                "Mencionar fencing.",
+                "Exigir teste medido para sustentar RTO.",
+              ]
+      - title: "Fontes para conferir os mecanismos"
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "Kubernetes — arquitetura do cluster"
+                url: https://kubernetes.io/docs/concepts/architecture/
+              - label: "Kubernetes — recursos de containers"
+                url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+              - label: "Kubernetes — StatefulSets"
+                url: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+              - label: "Kubernetes — startup, readiness e liveness"
+                url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+              - label: "Docker Compose — inicialização e healthchecks"
+                url: https://docs.docker.com/compose/how-tos/startup-order/
+              - label: "Kubernetes — persistência"
+                url: https://kubernetes.io/docs/concepts/storage/persistent-volumes/

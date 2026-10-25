@@ -11,7 +11,9 @@ interface Props {
 }
 const { group, limit = 4 } = Astro.props;
 const { tech, meta, docs } = group;
-const chips = docs.slice(0, limit);
+const chips = docs
+	.filter((doc) => doc.data.learning?.kind !== "orientation")
+	.slice(0, limit);
 ---
 
 <section
@@ -48,7 +50,11 @@ const chips = docs.slice(0, limit);
 		href={techUrl(tech)}
 		class="tech-more group flex w-fit items-center gap-1.5 font-mono text-xs"
 	>
-		{`Ver ${docs.length} ${docs.length === 1 ? "guia" : "guias"}`}
+		{
+			tech === "sistemas"
+				? "Explorar a formação"
+				: `Ver ${docs.length} ${docs.length === 1 ? "guia" : "guias"}`
+		}
 		<Icon
 			name="lucide:arrow-right"
 			class="size-3.5 transition-transform duration-fast group-hover:translate-x-0.5"

@@ -1,0 +1,299 @@
+id: sistemas-laboratorios
+title: "Sistemas: laboratório integrado"
+subtitle: "Meça, provoque falhas locais, registre evidências e explique o resultado — de transações a CDC e reconciliação."
+cardDescription: "Sete experimentos com arquivos completos: Python, PostgreSQL, Debezium, Kafka, Kubernetes e recuperação."
+tech: sistemas
+order: 110
+readerLayout: narrative
+codeLanguage: bash
+learning:
+  module: "Laboratórios integrados"
+  kind: laboratory
+  level: avancado
+  prerequisites:
+    [
+      sistemas-transacoes,
+      sistemas-cdc,
+      sistemas-cloud-native,
+      sistemas-confiabilidade,
+    ]
+  objectives:
+    - "Demonstrar rollback e repetição sem duplicar o efeito de negócio."
+    - "Interpretar um plano e um ciclo de deadlock com evidências."
+    - "Observar snapshot, insert, update e delete num pipeline CDC local."
+    - "Verificar persistência, arquivo e recuperação, registrando limitações."
+sections:
+  - id: preparar
+    name: "Preparação e método"
+    entries:
+      - title: "Dois ambientes para perguntas diferentes"
+        description: >-
+          O pacote da trilha contém todos os arquivos em labs/sistemas no repositório. O ERP Python,
+          sem dependências de pip, usa SQLite em dois arquivos para demonstrar fronteiras transacionais,
+          outbox, inbox, falhas e recuperação. Seu transporte é polling: não é captura de WAL. O ambiente
+          Compose usa PostgreSQL, Debezium e Kafka para observar CDC real. Mantê-los separados permite
+          testar invariantes sem exigir um cluster pesado e, depois, investigar mecanismos reais sem
+          fingir que uma simulação equivale a eles. O README do pacote reúne comandos, expectativas,
+          encerramento e limitações. Não execute estes experimentos em dados ou clusters de produção.
+        code: |-
+          git clone https://github.com/bruno-is/DevDocs.git
+          cd DevDocs/labs/sistemas
+          python --version
+          python -m unittest -v test_erp.py
+        callout:
+          type: hint
+          label: "Escolha o executável local"
+          text: "Requer Python 3.11+ com sqlite3. Em Linux use python3 se necessário; no Windows, py -3. Os arquivos também estão no pacote ZIP da trilha."
+      - title: "O que foi validado e o que você vai medir"
+        description: >-
+          Os dez testes automatizados do pacote passaram na entrega, incluindo API HTTP local, concorrência,
+          duplicação, arquivo e backup. A estrutura Compose foi validada com docker compose config.
+          Containers, SQL no PostgreSQL, CDC e Kubernetes não puderam ser executados neste ambiente
+          porque o backend Docker não inicializou; seus roteiros são fornecidos com essa limitação.
+          Não há tempos de benchmark pré-fabricados. Registre versões, CPU, memória, volume de dados,
+          aquecimento de cache, hipótese e saída observada. Para Compose, reserve inicialmente cerca
+          de 4 CPUs, 6 GiB RAM e 5 GiB livres, uma estimativa de planejamento a ajustar por medição.
+          kind exige capacidade adicional. Instale Docker, kubectl e kind pelos guias oficiais.
+        contentBlocks:
+          - type: checklist-block
+            title: "Caderno de experimento"
+            items:
+              - "Hipótese: qual mecanismo explica o comportamento previsto?"
+              - "Procedimento: quais comandos e em qual estado inicial?"
+              - "Evidência: saída, contagem, versão ou métrica que discrimina hipóteses."
+              - "Conclusão: o que o teste demonstra e quais falhas ficaram de fora?"
+  - id: transacoes-idempotencia
+    name: "Experimento de falhas e idempotência"
+    entries:
+      - title: "Uma requisição repetida pode representar um único comando"
+        description: >-
+          Execute as duas escritas com a mesma chave. O digest do comando e a resposta anterior ficam
+          na mesma transação da alteração e da outbox. A segunda chamada devolve a resposta já registrada,
+          sem criar outra versão. Troque o título mantendo a chave: deve ocorrer rejeição, pois uma
+          chave não autoriza atribuir dois significados ao mesmo comando. Inspecione source, projection,
+          pending e inbox. A projeção ainda está vazia antes de executar o worker, evidenciando a
+          distância entre aceitar a escrita e materializá-la para leitura. Datas são variáveis; use
+          contagens e versões como critérios, não igualdade literal do JSON inteiro entre máquinas.
+        code: |-
+          python erp.py init
+          python erp.py write 1 "Pedido sintetico" --key criar-1
+          python erp.py write 1 "Pedido sintetico" --key criar-1
+          python erp.py inspect
+      - title: "Falhe nas duas janelas e compare os estados"
+        description: >-
+          Execute cada comando separadamente: as falhas injetadas retornam código 1 intencionalmente.
+          Antes do commit da projeção, a exceção reverte inbox e efeito, mantendo pending=1. Depois
+          do commit, a projeção e inbox existem, mas o ACK da origem não foi gravado. No retry, o mesmo
+          evento volta e a chave da inbox impede repetir seu efeito. A guarda de versão também impede
+          que um evento antigo faça a projeção regredir. Há um worker e um lote limitado; o modelo não
+          implementa eleição, claim concorrente nem DLQ. A prova é local à transação do destino:
+          enviar email fora dela exigiria outro protocolo ou uma nova outbox para esse efeito externo.
+        code: |-
+          python erp.py pump --crash before
+          python erp.py inspect
+          python erp.py pump --crash after
+          python erp.py inspect
+          python erp.py pump
+          python erp.py inspect
+        contentBlocks:
+          - type: exercise
+            prompt: "Após --crash after, quais contagens provam a janela de duplicação? Por que a inbox deve compartilhar transação com o efeito?"
+            answer: >-
+              Existe uma projeção e uma inbox, enquanto pending permanece 1. O retry informa uma
+              duplicação e zera pending. Se a inbox fosse confirmada antes do efeito e o processo
+              falhasse entre ambos, o retry descartaria um evento ainda não aplicado. Se o efeito
+              fosse confirmado antes da inbox, o retry poderia repeti-lo. A transação única no destino
+              elimina essas duas janelas para os efeitos que pertencem ao mesmo banco.
+            rubric:
+              [
+                "Identificar pending=1 e inbox=1.",
+                "Explicar as duas ordens incorretas.",
+                "Limitar a garantia ao efeito transacional demonstrado.",
+              ]
+  - id: banco
+    name: "Experimentos de índice e concorrência"
+    entries:
+      - title: "Compare planos sem fabricar um fator de aceleração"
+        description: >-
+          O script performance.sql gera 200 mil pedidos sintéticos e executa uma consulta de cliente
+          ordenada por data. Primeiro não há índice de acesso correspondente; depois há um índice
+          composto por customer_id e created_at. Registre rows estimadas/reais, buffers, sort e tempo.
+          Repita com cache aquecido e compare também tamanho total. Um plano diferente pode ser
+          racional se a seletividade, o limite ou as estatísticas mudarem. O exercício mede o efeito
+          desse padrão de acesso no seu ambiente, sem prometer que um índice sempre vence uma varredura.
+          O script trunca apenas a tabela sintética perf_orders; não use um banco compartilhado.
+        code: |-
+          docker compose config --quiet
+          docker compose up -d db
+          docker compose exec db psql -U lab -d erp -f /lab/performance.sql
+      - title: "Produza um ciclo de espera observável"
+        description: >-
+          Abra dois terminais psql e siga session-a.sql e session-b.sql linha por linha, respeitando
+          os pontos de parada. A prende id 1; B prende id 2; A tenta id 2; B tenta id 1. O PostgreSQL
+          detecta o ciclo e aborta uma transação; a vítima não é predeterminada. Na vítima execute
+          ROLLBACK, na sobrevivente COMMIT. Inspecione waits num terceiro terminal e explique por
+          que uma transação pode esperar sem usar muita CPU. Refaça adquirindo os IDs na mesma ordem.
+          Em seguida proponha retry da transação inteira, com limite e idempotência. Não tente resolver
+          o mecanismo aumentando arbitrariamente todos os timeouts.
+        code: |-
+          docker compose exec db psql -U lab -d erp
+        contentBlocks:
+          - type: reference-card
+            items:
+              - "sql/session-a.sql e sql/session-b.sql coordenam a ordem das instruções."
+              - "Verifique pg_stat_activity e pg_blocking_pids durante a espera."
+              - "Depois do conflito, confira a soma dos saldos e o resultado da transação sobrevivente."
+  - id: cdc-real
+    name: "Experimento de CDC real"
+    entries:
+      - title: "Observe o snapshot antes de alterar a origem"
+        description: >-
+          O Compose fixa PostgreSQL 17.11, Kafka JVM 3.9.1 em KRaft e Debezium Connect 3.3.1.Final.
+          A publicação e o usuário de replicação/leitura são criados no bootstrap. register_connector.py
+          registra a configuração e verifica connector e tasks; uma task RUNNING ainda não prova que
+          todo snapshot terminou. Num volume novo existem três tickets e o primeiro consumidor encerra
+          após observá-los. Procure op=r no envelope e os metadados de origem. Volumes reutilizados
+          podem conter eventos adicionais. Se o timeout ocorrer, investigue status/logs antes de assumir
+          perda. Não apague slots ou volumes para “consertar” uma posição que você ainda não entendeu.
+        code: |-
+          docker compose up -d
+          python register_connector.py
+          docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic erp.public.tickets --from-beginning --max-messages 3 --timeout-ms 30000
+      - title: "Siga create, update, delete e recuperação"
+        description: >-
+          Abra o consumidor contínuo indicado no README e faça as operações abaixo. Procure op=c,
+          op=u e op=d; o delete pode ser seguido de um tombstone com valor null. REPLICA IDENTITY FULL
+          foi escolhido para observar a imagem anterior e aumenta o custo de WAL. Pare o serviço
+          connect, altere outra linha e inspecione retenção em pg_replication_slots; ao voltar, observe
+          a recuperação. max_slot_wal_keep_size limita retenção, mas pode invalidar um slot atrasado:
+          é um trade-off, não um mecanismo mágico de recuperação. Um broker com fator de replicação 1
+          não demonstra tolerância à perda do broker, e imprimir eventos não demonstra uma projeção
+          exactly-once. Registre precisamente o que foi observado.
+        code: |-
+          docker compose exec db psql -U lab -d erp -c "INSERT INTO tickets(tenant_id,title) VALUES(3,'CDC sintetico');"
+          docker compose exec db psql -U lab -d erp -c "UPDATE tickets SET status='closed',version=version+1,updated_at=now() WHERE id=1;"
+          docker compose exec db psql -U lab -d erp -c "DELETE FROM tickets WHERE id=2;"
+          docker compose stop connect
+          docker compose exec db psql -U lab -d erp -c "UPDATE tickets SET version=version+1,updated_at=now() WHERE id=1;"
+          docker compose start connect
+        tags: [CDC, Debezium, snapshot, PostgreSQL, Kafka, tombstone]
+  - id: cluster
+    name: "Experimento de reconciliação e persistência"
+    entries:
+      - title: "Um Deployment substitui Pods"
+        description: >-
+          Instale kind e kubectl e confirme um contexto de desenvolvimento antes de aplicar o manifesto.
+          O arquivo cria namespace, Deployment echo com duas réplicas, Service e um experimento de volume.
+          Após rollout, exclua os Pods echo e observe os novos. A aplicação fica acessível por port-forward;
+          a queda do Pod usado pelo túnel pode interrompê-lo, exigindo nova execução. Registre os UIDs
+          antes/depois. O teste demonstra reconciliação, não ausência de requisições perdidas nem
+          resiliência física do notebook. Se o rollout falhar, consulte eventos, imagem, recursos e
+          probes. Não trate Running como sinônimo de Ready.
+        code: |-
+          kind create cluster --name devdocs
+          kubectl config current-context
+          kubectl apply -f k8s.yaml
+          kubectl -n devdocs-lab rollout status deployment/echo --timeout=120s
+          kubectl -n devdocs-lab get pods,svc,pvc
+          kubectl -n devdocs-lab delete pod -l app=echo
+          kubectl -n devdocs-lab port-forward service/echo 8088:80
+      - title: "Um PVC preserva um marker sob uma falha específica"
+        description: >-
+          Leia /data/marker no Pod volume-demo, delete esse Pod isolado e reaplique o manifesto.
+          O marker deve permanecer no PVC, enquanto a recriação do Pod isolado depende do novo apply.
+          Se o PVC permanecer Pending, verifique StorageClass padrão e eventos de binding. O storage
+          local do kind não replica entre zonas e desaparece quando o cluster é apagado. Explique
+          quais falhas o teste cobriu: recriação de Pod com o mesmo volume. Não alegue ter testado
+          falha de disco, split-brain ou recuperação de PostgreSQL apenas porque o arquivo foi preservado.
+        code: |-
+          kubectl -n devdocs-lab exec volume-demo -- cat /data/marker
+          kubectl -n devdocs-lab delete pod volume-demo
+          kubectl apply -f k8s.yaml
+          kubectl -n devdocs-lab wait --for=condition=Ready pod/volume-demo --timeout=120s
+          kubectl -n devdocs-lab exec volume-demo -- cat /data/marker
+  - id: arquivo-recuperacao
+    name: "Experimentos de arquivo e recuperação"
+    entries:
+      - title: "Verifique antes de remover a projeção quente"
+        description: >-
+          Feche o ticket, processe o evento e arquive a projeção. O cutoff distante inclui os registros
+          sintéticos fechados; não é política de retenção recomendada. O pacote grava JSONL e manifesto
+          com quantidade, schema e SHA-256, verifica a cópia e só então remove os registros da projeção.
+          A origem e outbox continuam intactas, portanto não há redução total de dados nem expurgo
+          de informações pessoais. Reidrate e confira a versão; a operação não deve sobrescrever
+          uma versão mais recente. Alterar uma cópia do JSONL deve causar rejeição por checksum.
+          Use uma pasta de destino nova: o programa recusa sobrescrever arquivos anteriores.
+        code: |-
+          python erp.py write 1 "Pedido sintetico" --status closed --key fechar-1
+          python erp.py pump
+          python erp.py archive .lab-cold-1 --cutoff 9999-01-01T00:00:00+00:00
+          python erp.py inspect
+          python erp.py rehydrate .lab-cold-1
+      - title: "Recupere numa pasta diferente e prove uma consulta de negócio"
+        description: >-
+          Pare API e worker para um ponto operacional comum no exercício. O backup usa a API SQLite
+          e verifica integridade de cada arquivo; não é snapshot distribuído atômico nem PITR.
+          Abra a cópia com --data, confira tickets e processe eventos pendentes. Meça o tempo e valide
+          estado e versão, sem sobrescrever a origem. Para observabilidade local, rode erp.py serve,
+          acompanhe /state e /metrics antes/depois de pump e correlacione logs de duração/status.
+          As métricas são JSON didático, não Prometheus nem OpenTelemetry ativo. Uma origem correta
+          com pending crescente orienta investigação do worker antes de mudanças no endpoint HTTP.
+        code: |-
+          python erp.py backup .lab-backup-1
+          python erp.py --data .lab-backup-1 inspect
+          python erp.py --data .lab-backup-1 pump
+  - id: entrega
+    name: "Conclusão, limpeza e avaliação"
+    entries:
+      - title: "Entregue evidência e uma explicação causal"
+        description: >-
+          O trabalho final do laboratório é um relatório curto por experimento: estado inicial,
+          hipótese, comandos, resultado, explicação e limites. Para o índice, compare plano e buffers;
+          para o deadlock, desenhe o ciclo; para CDC, identifique operação e posição; para duplicação,
+          mostre inbox/efeito/ACK; para recuperação, valide uma consulta e cronometre. Classifique cada
+          item como executado, falhou com evidência ou apenas revisado. Um comando sem saída observada
+          não prova uma garantia. Um resultado que contradiz sua hipótese é material de estudo:
+          investigue estado residual, cache, permissões e versões antes de editar o relatório para
+          parecer bem sucedido.
+        contentBlocks:
+          - type: exercise
+            prompt: "O marker sobreviveu, o conector está RUNNING e o teste Python passou. Quais conclusões sobre produção ainda não estão demonstradas?"
+            answer: >-
+              Não foram provadas durabilidade contra perda física, eleição/fencing, restauração em
+              escala, compatibilidade de upgrades, segurança entre tenants nem entrega exactly-once
+              através de um efeito externo. O marker cobre apenas o PVC nesse ciclo; RUNNING cobre
+              estado de execução; os testes Python cobrem invariantes locais sob falhas injetadas.
+              Cada promessa adicional exige um teste ou contrato específico e condições documentadas.
+            rubric:
+              [
+                "Associar cada evidência ao limite correto.",
+                "Citar três garantias não demonstradas.",
+                "Propor um próximo teste relevante.",
+              ]
+      - title: "Encerre sem perder evidências por acidente"
+        description: >-
+          Ctrl+C encerra servidores, consumidores e port-forward. docker compose down encerra os
+          containers e preserva volumes. Somente quando terminar, conferir o diretório e aceitar perder
+          os dados sintéticos, use docker compose down -v. Apagar o cluster kind devdocs também apaga
+          seus volumes locais. Preserve os relatórios fora dessas áreas. As pastas .lab-data,
+          .lab-cold-* e .lab-backup-* podem ser mantidas para comparação; remova manualmente apenas
+          depois de inspecionar. Não há limpeza recursiva automática do diretório de trabalho.
+        callout:
+          type: danger
+          label: "Limpeza elimina dados locais"
+          text: "docker compose down -v e kind delete cluster --name devdocs apagam armazenamento do laboratório. Confirme projeto e contexto; não aplique a ambientes compartilhados."
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "Python — sqlite3 e backup"
+                url: https://docs.python.org/3/library/sqlite3.html
+              - label: "PostgreSQL 17 — EXPLAIN"
+                url: https://www.postgresql.org/docs/17/using-explain.html
+              - label: "PostgreSQL 17 — locks e deadlocks"
+                url: https://www.postgresql.org/docs/17/explicit-locking.html
+              - label: "Debezium 3.3 — conector PostgreSQL"
+                url: https://debezium.io/documentation/reference/3.3/connectors/postgresql.html
+              - label: "Kafka 3.9 — imagem Docker oficial"
+                url: https://kafka.apache.org/39/getting-started/docker/
+              - label: "kind — instalação e cluster local"
+                url: https://kind.sigs.k8s.io/docs/user/quick-start/

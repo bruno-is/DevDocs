@@ -1,0 +1,204 @@
+id: sistemas-bancos-internos
+title: "Sistemas: como um banco executa e armazena"
+subtitle: Páginas, memória, índices, otimizadores e manutenção explicados pelo caminho de uma consulta.
+cardDescription: Investigue planos e custos de leitura e escrita com PostgreSQL 17 e MySQL 8.4.
+tech: sistemas
+order: 20
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: Engenharia interna de bancos
+  level: intermediario
+  prerequisites: [sistemas-fundamentos]
+  objectives:
+    - Explicar o papel de páginas, buffers e índices no caminho de uma consulta.
+    - Escolher a ordem de um índice composto a partir de filtro, ordenação e seletividade.
+    - Comparar estimativa e execução em um plano sem confundir custo com milissegundos.
+    - Planejar manutenção e evolução de schema considerando locks e amplificação de escrita.
+quickStart:
+  title: Investigue uma consulta, não um número isolado
+  kicker: PostgreSQL 17 e InnoDB no MySQL 8.4
+  description: Os exemplos SQL indicam seu SGBD. Execute apenas em uma base descartável. Planos, tempos e buffers variam com hardware, estatísticas, versão e cache; este capítulo não apresenta números de desempenho como resultados medidos.
+  steps:
+    - Desenhe a busca por uma linha na memória e depois no armazenamento.
+    - Formule uma hipótese de índice para a consulta do exemplo.
+    - Compare linhas estimadas, linhas observadas, loops e acesso a buffers.
+sections:
+  - id: paginas-e-buffers
+    name: Páginas, buffers e organização física
+    entries:
+      - title: SQL descreve o resultado; o banco escolhe trabalho físico
+        description: >-
+          Ao pedir os vinte chamados recentes de um cliente, você descreve filtro, ordem e limite. O banco analisa a instrução, resolve nomes e tipos, considera caminhos de acesso e produz um plano. Executores percorrem estruturas físicas para satisfazê-lo. Encontrar uma linha pode exigir buscar uma página de índice, localizar outra página e verificar a versão visível da linha. A quantidade de linhas retornadas não informa quantas foram examinadas. Uma consulta que retorna uma única soma pode ler a tabela inteira. Para investigar, acompanhe redução de linhas e movimentação de dados entre os operadores. Isso ajuda a separar um problema de modelagem, um plano ruim e um recurso físico saturado, em vez de atribuir qualquer demora ao tamanho do banco.
+        tags: [SGBD, executor, otimizador, plano de execução]
+      - title: O armazenamento movimenta blocos maiores que uma coluna
+        description: >-
+          Um banco geralmente organiza dados em páginas: unidades de armazenamento que contêm várias linhas, posições e metadados. O PostgreSQL usa normalmente páginas de 8 KiB, embora o tamanho possa ser escolhido na compilação. Ler um campo pode exigir trazer sua página inteira. Linhas largas reduzem a quantidade que cabe por página e aumentam o conjunto de trabalho; valores grandes podem ter tratamento externo específico. Localidade importa: percorrer páginas próximas tende a ser diferente de procurar linhas dispersas. Não derive I/O físico multiplicando linhas retornadas por tamanho de registro. Há cabeçalhos, versões, páginas parcialmente ocupadas e cache. Medir páginas e bytes, além de linhas, conecta o plano lógico ao recurso que efetivamente custa tempo.
+        tags: [página, bloco, heap, localidade, storage]
+      - title: Buffer pool é um orçamento disputado
+        description: >-
+          Buffers mantêm páginas em memória para evitar leituras repetidas e agrupar trabalho. Uma página modificada em memória fica suja até ser gravada de acordo com o protocolo do banco. PostgreSQL possui shared buffers e também interage com o cache do sistema operacional; InnoDB administra seu buffer pool. As estruturas e parâmetros não são intercambiáveis. Um cache aquecido pode transformar o tempo de uma segunda execução sem qualquer mudança de SQL. O conjunto de trabalho é a parte dos dados e índices acessada no período relevante, não o tamanho inteiro da base. Pressão de memória também vem de ordenações, hashes, sessões e runtime. Não configure cada orçamento como se fosse o único consumidor de RAM. Observe taxa de I/O, esperas e memória sob concorrência representativa.
+        contentBlocks:
+          - type: diagram
+            caption: Caminho conceitual de uma página; um hit em memória evita uma leitura física naquele acesso.
+            nodes:
+              - label: Operador do plano
+                detail: Solicita linhas e páginas para executar filtro, join ou ordenação.
+              - label: Gerenciador de buffers
+                detail: Localiza uma página residente ou providencia sua leitura.
+              - label: Armazenamento
+                detail: Entrega páginas ausentes; gravação e sincronização seguem o protocolo do banco.
+  - id: estruturas-de-indice
+    name: Estruturas de índice e custo de escrita
+    entries:
+      - title: B-tree torna a busca seletiva barata, sob condições
+        description: >-
+          Uma árvore balanceada mantém chaves ordenadas e reduz a região a explorar a cada nível. Na família B+tree, registros ou referências ficam nas folhas, favorecendo intervalos ordenados. A implementação exata depende do motor. Índices ajudam quando eliminam trabalho suficiente; ler grande parte da tabela por acessos dispersos pode custar mais que uma varredura. O índice também ocupa memória e disco e precisa acompanhar escritas. Uma coluna com poucos valores pode ter índice útil se a distribuição for muito desigual ou houver filtro combinado; cardinalidade baixa não é proibição universal. Seletividade descreve quanto uma condição reduz o conjunto. O custo depende ainda de correlação física, largura das linhas, cache e quantidade a retornar.
+        tags: [B-tree, B+tree, seletividade, cardinalidade]
+      - title: A mesma chave primária tem efeitos diferentes
+        description: >-
+          No InnoDB, a organização clustered armazena a linha junto ao índice primário; índices secundários incluem a chave primária para localizar a linha. Uma chave primária larga tende a ampliar também os secundários. No PostgreSQL, uma tabela heap e seus índices são estruturas separadas: uma busca no índice geralmente referencia uma versão no heap, e um index-only scan depende também das informações de visibilidade. Portanto, a receita de escolher uma chave e calcular seu custo precisa citar o motor. Inserções aleatórias podem pressionar páginas e cache; chaves crescentes podem concentrar escrita em uma extremidade. Não conclua que UUID é sempre inviável ou inteiro sempre suficiente: compare distribuição, geração, unicidade entre produtores, ocupação e consultas.
+        contentBlocks:
+          - type: comparison-block
+            title: Organização física não é uma propriedade universal do SQL
+            columns:
+              - title: PostgreSQL 17
+                items:
+                  [
+                    Heap separado dos índices,
+                    Visibilidade de versões participa da leitura,
+                    Index-only depende de condições de visibilidade,
+                  ]
+              - title: InnoDB no MySQL 8.4
+                items:
+                  [
+                    Linhas nas folhas do índice clustered,
+                    Secundários carregam a chave primária,
+                    Largura da chave afeta vários índices,
+                  ]
+      - title: Hash e LSM resolvem problemas distintos
+        description: >-
+          Uma estrutura hash distribui chaves por uma função e favorece igualdade; não fornece naturalmente a ordem necessária a um intervalo. LSM-tree acumula alterações em memória e arquivos ordenados, consolidando-os por compaction. Isso favorece certos padrões de ingestão, mas desloca custo para compactação, leitura de múltiplas estruturas e espaço temporário. Bloom filters podem evitar buscas em arquivos que certamente não contêm a chave, admitindo falsos positivos. Write amplification, read amplification e space amplification descrevem recursos diferentes e mudam conforme carga e configuração. O PostgreSQL e o InnoDB dos exemplos não passam a usar LSM porque a tabela recebe muitas escritas. Ao comparar motores, observe comportamento em regime sustentado, durante compactação e depois de falhas, não apenas uma importação curta.
+        tags:
+          [hash index, LSM-tree, compaction, bloom filter, write amplification]
+  - id: desenho-de-consultas
+    name: Índices compostos e consultas previsíveis
+    entries:
+      - title: O índice deve acompanhar uma pergunta concreta
+        description: >-
+          Considere um help desk que lista chamados de um tenant e estado específicos, ordenados por criação e ID. Um índice com tenant e estado na frente, seguido por criação e ID, pode localizar a faixa e percorrê-la na ordem desejada. A ordem é lexicográfica, como um catálogo organizado primeiro por sobrenome e depois por nome. Um filtro apenas no segundo campo pode não reduzir a leitura com a mesma eficiência. Essa é uma explicação para PostgreSQL 17 e seu B-tree; outras versões e estratégias podem introduzir caminhos adicionais. Não basta declarar que o índice foi usado: confirme linhas examinadas, ordenação evitada e custo de manter a estrutura. Um índice de cobertura pode economizar acessos e também aumentar bastante a escrita.
+        code: |-
+          CREATE TABLE chamados_estudo (
+            id bigint PRIMARY KEY,
+            tenant_id integer NOT NULL,
+            estado text NOT NULL,
+            criado_em timestamptz NOT NULL
+          );
+          CREATE INDEX chamados_estudo_lista_idx
+            ON chamados_estudo
+            (tenant_id, estado, criado_em DESC, id DESC);
+
+          SELECT id, criado_em
+          FROM chamados_estudo
+          WHERE tenant_id = 7 AND estado = 'aberto'
+          ORDER BY criado_em DESC, id DESC
+          LIMIT 20;
+        tags: [índice composto, leftmost, cobertura, ordenação]
+      - title: Estatística descreve distribuição, não apenas contagem
+        description: >-
+          O otimizador estima quantas linhas passam por um filtro e usa a estimativa para comparar alternativas. Se presume independência entre duas colunas muito correlacionadas, pode errar bastante. Um tenant enorme também pode ser diferente do cliente típico. Estatísticas amostradas e desatualizadas explicam parte das divergências entre esperado e observado; parâmetros, prepared statements e planos genéricos acrescentam condições específicas. Antes de criar outro índice, compare as estimativas e atualize estatísticas no ambiente apropriado. PostgreSQL oferece estatísticas estendidas para certas correlações, mas isso não corrige todo predicado nem garante melhor plano. O diagnóstico precisa incluir valor usado, distribuição dos dados e versão, para que a consulta rápida de um tenant não esconda a consulta lenta de outro.
+        tags: [ANALYZE, estatísticas, correlação, distribuição, plano genérico]
+      - title: Paginação por cursor precisa de ordem estável
+        description: >-
+          OFFSET alto exige ao executor descartar muitas linhas antes de entregar a página. Keyset pagination retoma após a última chave conhecida e pode manter o trabalho próximo ao tamanho da página, quando existe índice adequado. Use um desempate único: somente criado_em pode repetir e fazer itens desaparecerem ou voltarem. No exemplo descendente, a próxima página usa o par da última linha e comparação menor. O cursor precisa carregar tenant, filtros e posição de forma validada pela API. Escritas concorrentes ainda mudam o conjunto entre páginas; um cursor não cria automaticamente um snapshot de toda a navegação. Para exportação consistente, defina snapshot, watermark ou outra estratégia apropriada ao contrato e ao custo de manter versões.
+        code: |-
+          SELECT id, criado_em
+          FROM chamados_estudo
+          WHERE tenant_id = 7
+            AND estado = 'aberto'
+            AND (criado_em, id) <
+              ('2026-01-15T12:00:00Z'::timestamptz, 9000)
+          ORDER BY criado_em DESC, id DESC
+          LIMIT 20;
+        tags: [paginação, cursor, keyset, OFFSET, snapshot]
+  - id: planos-e-experimento
+    name: Planos e um experimento controlado
+    entries:
+      - title: Leia o plano de baixo para cima e compare trabalho
+        description: >-
+          EXPLAIN mostra o plano estimado. EXPLAIN ANALYZE executa a instrução e acrescenta observações. No PostgreSQL, custo é uma unidade do modelo do planejador, não milissegundos. Observe estimativa de linhas versus actual rows, número de loops, linhas descartadas e buffers. Os valores de tempo e linhas de um nó com múltiplos loops são apresentados como médias por execução daquele nó; loops ajuda a entender trabalho repetido. Não some tempos de pais e filhos como etapas independentes, pois há inclusão. Shared hit significa acesso atendido em shared buffers; shared read não prova acesso físico ao dispositivo, pois pode haver cache do sistema operacional. Escolha o próximo teste pela primeira divergência relevante, em vez de culpar o nó que aparece no topo.
+        tags: [EXPLAIN, EXPLAIN ANALYZE, BUFFERS, loops, plano de execução]
+      - title: Gere um conjunto sintético e preserve a comparação
+        description: >-
+          Depois de criar chamados_estudo, carregue dados sintéticos e execute ANALYZE. Compare a consulta com o índice composto e, apenas nessa base descartável, sem ele. Registre ambiente, número de linhas, plano, buffers e várias repetições; separe primeira execução e cache aquecido. A distribuição deste exemplo é artificial e não representa produção. O índice primário permanece, mas não responde sozinho ao filtro composto. O resultado esperado conceitual é que o índice de listagem ofereça um caminho seletivo e ordenado; o planejador pode preferir outra estratégia em condições diferentes. Não use um único tempo como prova. O valor didático está em explicar por que as leituras, filtros e ordenações mudaram.
+        code: |-
+          INSERT INTO chamados_estudo
+          SELECT g, g % 100,
+            CASE WHEN g % 5 = 0 THEN 'fechado' ELSE 'aberto' END,
+            timestamptz '2026-01-01T00:00:00Z'
+              + g * interval '1 second'
+          FROM generate_series(1, 100000) AS g;
+          ANALYZE chamados_estudo;
+
+          EXPLAIN (ANALYZE, BUFFERS)
+          SELECT id, criado_em FROM chamados_estudo
+          WHERE tenant_id = 7 AND estado = 'aberto'
+          ORDER BY criado_em DESC, id DESC LIMIT 20;
+        callout:
+          type: danger
+          label: Execução e limpeza em base descartável
+          text: EXPLAIN ANALYZE também executa INSERT, UPDATE e DELETE. Uma transação com ROLLBACK não desfaz necessariamente efeitos externos de funções ou consumo de sequências. Use dados descartáveis e não transporte esta receita para produção sem análise. Ao terminar, DROP TABLE chamados_estudo apaga somente a tabela de laboratório e seus índices; execute essa limpeza apenas na base descartável que você criou.
+      - title: Uma regressão de join pode nascer antes do join
+        description: >-
+          Nested loop executa trabalho no lado interno para cada linha do externo; funciona bem quando esse conjunto é pequeno e o acesso interno é barato. Hash join constrói uma estrutura de um lado e procura correspondências do outro; memória insuficiente pode provocar particionamento e I/O temporário. Merge join explora entradas ordenadas, cujo preparo também custa. Um filtro subestimado pode levar a milhares de buscas internas onde se esperavam poucas. Portanto, um join lento não exige automaticamente substituir sua sintaxe. Verifique cardinalidades, índices nas chaves, duplicações inesperadas e memória usada. Restrinja colunas e linhas cedo quando a semântica permitir. Agrupar antes de unir pode reduzir tráfego, mas também alterar o resultado se a chave e as duplicações não forem compreendidas.
+  - id: operacao-e-evolucao
+    name: Manutenção, pooling e evolução
+    entries:
+      - title: Atualizar uma linha deixa trabalho para depois
+        description: >-
+          Versões antigas, índices, logs e páginas modificadas tornam o custo da escrita maior que o tamanho do novo valor. PostgreSQL usa vacuum para permitir reutilização de espaço e manter condições de visibilidade e segurança de IDs de transação; ANALYZE atualiza estatísticas. VACUUM comum não é uma promessa de devolver todo espaço ao sistema operacional. Transações longas podem impedir a remoção de versões ainda potencialmente visíveis. InnoDB possui purge e estruturas undo com responsabilidades próprias. Delete em massa e criação de muitos índices podem pressionar log, replicação e manutenção depois do comando terminar. Ao avaliar uma mudança, meça também o período de recuperação e o crescimento sustentado do armazenamento. Desativar manutenção para acelerar um benchmark apenas empurra dívida para fora da janela medida.
+        tags: [vacuum, autovacuum, purge, bloat, manutenção]
+      - title: Pooling e particionamento têm fronteiras específicas
+        description: >-
+          Um pool reutiliza conexões e limita simultaneidade. Meça fila de aquisição, tempo de uso e timeouts antes de ampliar seu tamanho; conexões não são capacidade de CPU. Em modos de pooling por transação, estado de sessão e alguns recursos exigem cuidados de compatibilidade. Particionamento divide uma tabela lógica em partes físicas e pode ajudar retenção e pruning quando filtros incluem a chave. Não distribui automaticamente escrita entre servidores. Muitas partições acrescentam custo de catálogo e planejamento. Planeje criação futura, ausência de partição e unicidade compatível com a chave escolhida. Para histórico mensal, remover uma partição pode ser mais previsível que milhões de deletes, mas exige política de retenção, backup e verificação dos dados arquivados.
+        tags: [connection pool, pooling, particionamento, partition pruning]
+      - title: Migrations grandes precisam de uma estratégia de compatibilidade
+        description: >-
+          Uma alteração de schema pode adquirir locks, reescrever dados, gerar log e bloquear deploys concorrentes. Use expansão e contração: adicione estrutura compatível, publique código capaz de operar durante a transição, preencha em lotes limitados, valide e só depois remova a estrutura antiga. PostgreSQL permite CREATE INDEX CONCURRENTLY com restrições próprias e fora de um bloco de transação; uma falha pode deixar índice inválido para investigar. MySQL possui algoritmos de DDL cujo suporte depende da operação e da versão; online não significa ausência total de locks. Defina timeout, observação e critério de interrupção antes de começar. Uma migração só acaba quando todos os leitores e escritores usam o contrato novo e há evidência de integridade.
+        tags: [migration, expand contract, DDL, índice concorrente, lock]
+  - id: exercicios-e-referencias
+    name: Exercícios e referências
+    entries:
+      - title: Explique o plano antes de propor um índice
+        contentBlocks:
+          - type: exercise
+            prompt: Uma consulta retorna vinte linhas. O plano estima cem no filtro, observa oitenta mil e faz oitenta mil buscas no lado interno de um nested loop. Um colega recomenda dobrar o pool. Qual investigação você faria primeiro?
+            answer: A divergência de cardinalidade justifica examinar distribuição, filtros, estatísticas e valores usados. Confirme se as buscas internas são indexadas e qual trabalho repetem; depois compare um plano alternativo com os mesmos dados. Dobrar conexões pode apenas multiplicar esse trabalho e a contenção. Um índice adicional pode ajudar, mas só após explicar o acesso e o custo de sua manutenção.
+            rubric:
+              - Localiza a divergência entre estimado e observado.
+              - Relaciona loops ao trabalho repetido sem somar tempos inclusivos.
+              - Propõe um experimento comparável e considera custo de escrita.
+          - type: exercise
+            prompt: A tabela cresce 5 GB/dia e um novo índice economiza 10 ms em uma consulta executada dez vezes por dia. Toda escrita também altera a coluna indexada. O índice deve ser mantido?
+            answer: Esses dados não bastam. Meça frequência e latência das escritas, tamanho do índice, cache, criticidade e SLO da leitura. Cem milissegundos diários economizados não justificam automaticamente manutenção contínua; uma consulta rara, porém crítica, ainda pode merecer o índice. Compare alternativas como materialização e consulta histórica com atraso aceitável, explicitando complexidade e integridade.
+            rubric:
+              - Não decide apenas por volume acumulado ou ganho unitário.
+              - Considera criticidade, mistura de carga e custo operacional.
+              - Apresenta condições que mudariam a decisão.
+          - type: sources
+            title: Fontes por mecanismo
+            items:
+              - label: PostgreSQL 17 — layout de páginas
+                url: https://www.postgresql.org/docs/17/storage-page-layout.html
+              - label: PostgreSQL 17 — índices compostos
+                url: https://www.postgresql.org/docs/17/indexes-multicolumn.html
+              - label: PostgreSQL 17 — interpretação de EXPLAIN
+                url: https://www.postgresql.org/docs/17/using-explain.html
+              - label: PostgreSQL 17 — vacuum e manutenção
+                url: https://www.postgresql.org/docs/17/routine-vacuuming.html
+              - label: PostgreSQL 17 — particionamento declarativo
+                url: https://www.postgresql.org/docs/17/ddl-partitioning.html
+              - label: MySQL 8.4 — índices clustered e secundários no InnoDB
+                url: https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html
+              - label: CMU 15-445/645 — estruturas, execução e recuperação
+                url: https://15445.courses.cs.cmu.edu/fall2025/

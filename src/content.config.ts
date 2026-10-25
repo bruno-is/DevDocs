@@ -141,6 +141,35 @@ const contentBlockSchema = z.discriminatedUnion("type", [
 	contextBlock,
 	flowStepsBlock,
 	architectureExplorerBlock,
+	z.object({
+		type: z.literal("sources"),
+		title: z.string().optional(),
+		items: z
+			.array(
+				z.object({
+					label: z.string(),
+					url: z
+						.url()
+						.refine(
+							(url) => url.startsWith("https://"),
+							"Referências devem usar HTTPS",
+						),
+				}),
+			)
+			.min(1),
+	}),
+	z.object({
+		type: z.literal("exercise"),
+		title: z.string().optional(),
+		prompt: z.string(),
+		answer: z.string(),
+		rubric: z.array(z.string()).min(1),
+	}),
+	z.object({
+		type: z.literal("diagram"),
+		caption: z.string(),
+		nodes: z.array(z.object({ label: z.string(), detail: z.string() })).min(2),
+	}),
 ]);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
 
@@ -212,6 +241,7 @@ export const TECHS = [
 	"javascript",
 	"vue",
 	"arquitetura",
+	"sistemas",
 ] as const;
 export type Tech = (typeof TECHS)[number];
 
@@ -237,6 +267,18 @@ const docs = defineCollection({
 		readerLayout: z.enum(["panels", "narrative"]).optional(),
 		/** Valor padrão de `runnable` para as entries desta doc (sobrescrevível por entry). */
 		defaultRunnable: z.boolean().optional(),
+		/** Metadados de estudo; ordem e identidade continuam na própria doc. */
+		learning: z
+			.object({
+				module: z.string().min(1),
+				kind: z
+					.enum(["orientation", "chapter", "laboratory", "project"])
+					.default("chapter"),
+				level: z.enum(["fundamentos", "intermediario", "avancado"]),
+				prerequisites: z.array(z.string()).default([]),
+				objectives: z.array(z.string().min(1)).min(1),
+			})
+			.optional(),
 		quickStart: quickStartSchema.optional(),
 		sections: z.array(sectionSchema),
 		// derivados na migração:

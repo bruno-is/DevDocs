@@ -1,0 +1,203 @@
+id: sistemas-mensageria
+title: "Mensageria e integração confiável"
+subtitle: "Transformar confirmações, repetições e atrasos em protocolos que preservam efeitos de negócio."
+cardDescription: "Filas, logs, contratos, idempotência, Outbox, Inbox e sagas."
+tech: sistemas
+order: 60
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: "Integração assíncrona"
+  level: avancado
+  prerequisites: [sistemas-replicacao]
+  objectives:
+    - "Localizar janelas de perda e duplicação entre banco, broker e consumidor."
+    - "Projetar uma projeção idempotente com limite explícito de ordenação."
+    - "Escolher retenção, retry e contrato de evento a partir de falhas concretas."
+sections:
+  - id: modelos
+    name: "Filas, publicação e logs"
+    entries:
+      - title: "Assíncrono desloca a espera para um estado durável"
+        description: >-
+          Uma API pode confirmar que recebeu um trabalho antes de ele terminar. A resposta precisa dizer qual compromisso existe: solicitação validada, persistida, enfileirada ou concluída. Uma fila em memória do processo não sobrevive necessariamente a um reinício; se a aceitação é durável, identifique onde o trabalho está salvo. O consumidor processa em outro momento e pode falhar independentemente do produtor. O cliente passa a precisar consultar estado, receber uma notificação ou tolerar resultado posterior. Isso reduz acoplamento temporal, mas acrescenta estados intermediários, atrasos e procedimentos de recuperação. Para confirmar um pedido, a decisão entre responder criado e responder processamento pendente deve corresponder ao invariante realmente garantido, não ao desejo de esconder a latência.
+        tags: [assincrono, fila, evento, broker, producer, consumer]
+      - title: "Fila de trabalho e log retido oferecem consultas diferentes"
+        description: >-
+          Uma fila distribui tarefas entre trabalhadores; depois da confirmação, a mensagem normalmente deixa de estar disponível para esse fluxo. Um log retido mantém registros por uma política de tempo ou tamanho e deixa leitores avançarem por posições. No Kafka, grupos independentes podem construir projeções diferentes sobre o mesmo tópico; num grupo, as partições distribuem trabalho entre consumidores. Mais consumidores que partições não aumentam o paralelismo de atribuição dessas partições. Publicação/assinatura descreve a distribuição para interessados e pode ser implementada sobre filas ou logs. Escolha pelo que precisa recuperar: refazer uma projeção histórica, executar um trabalho uma vez como efeito ou distribuir notificações efêmeras são problemas distintos.
+        contentBlocks:
+          - type: comparison-block
+            title: "Produtos como exemplos de mecanismos"
+            columns:
+              - title: "Kafka"
+                items:
+                  [
+                    "Log particionado e retenção",
+                    "Offsets por grupo e possibilidade de replay",
+                    "Operação e capacidade dos brokers fazem parte do custo",
+                  ]
+              - title: "RabbitMQ"
+                items:
+                  [
+                    "Roteamento por exchanges e filas",
+                    "Ack, prefetch e confirmações do produtor",
+                    "Escolher tipo de fila e política de durabilidade",
+                  ]
+              - title: "SQS e SNS"
+                items:
+                  [
+                    "SQS organiza consumo de tarefas; SNS distribui publicações",
+                    "Serviços gerenciados com políticas e limites próprios",
+                    "Standard e FIFO têm contratos diferentes",
+                  ]
+      - title: "Chave, partição e ordem têm escopo"
+        description: >-
+          Se eventos do mesmo pedido devem ser aplicados em sequência, uma chave estável de pedido pode conduzi-los à mesma partição. Isso não ordena pedidos diferentes nem resolve operações feitas por múltiplas fontes sem coordenação. Reparticionar, mudar a chave ou alterar o número de partições pode exigir planejamento para preservar uma história por entidade. Um consumidor também pode destruir a ordem ao despachar registros da mesma entidade para tarefas concorrentes e confirmar antes de concluir. Inclua versão de agregado ou sequência de negócio quando o destino precisa rejeitar alterações antigas. A chave boa distribui carga e preserva a unidade de ordenação necessária; uma chave constante oferece ordem global ao preço de concentrar trabalho.
+  - id: confirmacoes
+    name: "Confirmações e efeitos"
+    entries:
+      - title: "Há três compromissos independentes"
+        description: >-
+          Persistir o pedido, o broker aceitar o evento e o consumidor concluir a projeção são fatos distintos. Uma confirmação do broker ao produtor não comprova que um consumidor terminou. Um ack do consumidor não torna atômica uma escrita feita num banco externo. Se o processo cai depois do efeito, mas antes do ack, a entrega pode reaparecer; se confirma antes do efeito e cai, o trabalho pode sumir desse fluxo. O protocolo correto começa pelo invariante: para uma projeção, geralmente queremos que uma entrega repetida produza o mesmo estado final. Registre em cada fronteira qual evidência permite avançar e qual estado durável permite retomar depois de um reinício.
+        contentBlocks:
+          - type: diagram
+            caption: "A confirmação de uma fronteira não atravessa automaticamente a seguinte."
+            nodes:
+              - label: "Transação no produtor"
+                detail: "Pedido e intenção de publicação precisam sobreviver juntos."
+              - label: "Persistência no broker"
+                detail: "A política de confirmação define o que o produtor sabe."
+              - label: "Transação no consumidor"
+                detail: "Deduplicação e efeito precisam ser uma decisão única."
+              - label: "Ack ou avanço de offset"
+                detail: "Se a resposta se perder, a entrega pode ser repetida."
+      - title: "At-most-once, at-least-once e exactly-once"
+        description: >-
+          At-most-once evita repetição pelo protocolo de entrega, aceitando risco de perder trabalho. At-least-once aceita repetição para poder recuperar tentativas sem confirmação; não significa entrega garantida para sempre sem retenção e operação corretas. Exactly-once precisa declarar o domínio da garantia. Transações Kafka podem coordenar leituras, offsets e escritas no próprio Kafka sob suas condições, mas não tornam automaticamente uma chamada HTTP ou uma cobrança externa parte da transação. Para o banco externo, persista identidade do evento e efeito na mesma transação ou use outro mecanismo verificável de coordenação. A propriedade relevante costuma ser efeito de negócio uma vez, apesar de várias entregas, e isso exige desenho da aplicação.
+      - title: "Uma Inbox atômica torna a repetição inofensiva"
+        description: >-
+          Uma tabela Inbox guarda a identidade dos eventos já aplicados. O consumidor tenta registrar o identificador e atualizar sua projeção na mesma transação. Se a restrição única indicar que o evento já existe, não repete o efeito e pode confirmar a entrega. Uma consulta prévia seguida de insert não basta: dois trabalhadores podem observar ausência simultaneamente. A identidade deve ser estável entre retries e replays e ter escopo, como produtor e event_id. A retenção da Inbox precisa cobrir a janela de repetição possível; apagar cedo reabre a duplicação. O exemplo trata somente efeitos no mesmo PostgreSQL. Enviar email ou debitar outro serviço exige outro protocolo idempotente na fronteira externa.
+        code: |-
+          CREATE TABLE inbox (
+            producer text NOT NULL,
+            event_id uuid NOT NULL,
+            received_at timestamptz NOT NULL DEFAULT now(),
+            PRIMARY KEY (producer, event_id)
+          );
+          CREATE TABLE projecao_pedido (
+            pedido_id bigint PRIMARY KEY,
+            versao bigint NOT NULL,
+            status text NOT NULL
+          );
+        contentBlocks:
+          - type: flow-steps
+            title: "Algoritmo do consumidor"
+            steps:
+              - "BEGIN; inserir Inbox com ON CONFLICT DO NOTHING RETURNING event_id."
+              - "Se o insert retornou uma linha, aplicar o efeito; caso contrário, não repeti-lo."
+              - "COMMIT; só então confirmar a entrega ou avançar o offset."
+              - "Se o commit ficou incerto, repetir com a mesma identidade e deixar a restrição decidir."
+  - id: atomicidade
+    name: "Eliminar o dual write e modelar processos"
+    entries:
+      - title: "Outbox torna a intenção parte da transação"
+        description: >-
+          Gravar no banco e publicar no broker em duas operações independentes cria dual write. Publicar primeiro permite evento sem pedido; gravar primeiro permite pedido sem evento se o processo cair no intervalo. A Outbox guarda uma intenção de evento na mesma transação do dado de negócio. Um relay posterior lê essa tabela por polling ou CDC e publica. O relay ainda pode publicar e cair antes de registrar sucesso, portanto o consumidor continua precisando de idempotência. Use identificador estável e contrato orientado ao domínio, como PedidoConfirmado, em vez de obrigar consumidores a interpretar toda mudança física de tabela. Planeje retenção e limpeza da Outbox sem apagar intenções ainda não publicadas.
+        code: |-
+          BEGIN;
+          UPDATE pedidos
+          SET status = 'confirmado', versao = versao + 1
+          WHERE id = 42 AND status = 'aberto';
+          -- A aplicação exige exatamente uma linha alterada antes de inserir.
+          INSERT INTO outbox (event_id, aggregate_id, event_type, payload)
+          VALUES (
+            '20000000-0000-0000-0000-000000000042',
+            42, 'PedidoConfirmado', '{"pedido_id":42,"versao":2}'
+          );
+          COMMIT;
+        callout:
+          type: hint
+          label: "Trecho de protocolo"
+          text: "Pressupõe tabelas pedidos e outbox, restrição única em event_id e validação de quantidade de linhas. O laboratório integrador fornece o schema executável; não execute esse trecho isolado como instalação."
+      - title: "CQRS, CDC e event sourcing não são sinônimos"
+        description: >-
+          CQRS separa modelos ou caminhos de escrita e leitura; pode existir dentro de um monólito e de um único banco. CDC observa alterações persistidas e pode alimentar uma projeção, mesmo que a fonte guarde apenas o estado atual. Event sourcing trata eventos de domínio como registro autoritativo para reconstruir estado; exige versão de eventos, ordenação, migração de projeções e regras para correções históricas. Uma alteração de coluna capturada do log raramente explica sozinha a intenção do negócio. Adote a separação quando as consultas ou invariantes justificarem seu custo. Uma consulta SQL bem indexada pode atender a leitura sem outro armazenamento, sem um broker e sem uma segunda fonte de divergência.
+      - title: "Sagas expõem o progresso e a compensação"
+        description: >-
+          Uma saga divide um processo entre transações locais e comunica avanço por mensagens ou comandos. Confirmar pedido, reservar estoque e cobrar pagamento deixam de ser uma transação única. Modele estados como aguardando_reserva, aguardando_pagamento, concluido e compensacao_pendente. A compensação devolve uma reserva ou inicia um estorno; pode falhar e requer retry e intervenção. Um orquestrador central facilita visualizar a sequência, mas concentra lógica de processo. Coreografia distribui reações, mas torna fluxos cíclicos e diagnóstico mais difíceis. Em ambos, identifique correlação, prazo e dono de cada transição. Um timeout de pagamento pode significar cobrança concluída com resposta perdida: consultar por chave idempotente precede uma nova cobrança.
+  - id: controle
+    name: "Retry, pressão e mensagens problemáticas"
+    entries:
+      - title: "Retry precisa de classificação, orçamento e prazo"
+        description: >-
+          Uma indisponibilidade transitória pode melhorar depois; um payload incompatível não muda por ser reenviado mil vezes. Classifique falha transitória, permanente e resultado incerto. Exponential backoff aumenta intervalos e jitter evita que muitos clientes retornem juntos. Limite tentativas ou duração total e respeite o prazo de negócio. Retries em várias camadas multiplicam carga: três tentativas em três fronteiras podem produzir até 27 chamadas no pior encadeamento. Use um orçamento comum quando possível e reduza concorrência durante degradação. Registre tentativa, motivo e próxima execução sem expor dados pessoais. Ao esgotar o prazo, torne o estado visível para recuperação; descartar silenciosamente não é um tratamento de erro.
+      - title: "DLQ é uma estação de investigação"
+        description: >-
+          Uma dead-letter queue separa mensagens que não puderam ser processadas conforme a política. Ela precisa de responsável, alerta, retenção, proteção de dados e procedimento de redrive. Se reenviar a mensagem sem corrigir contrato ou dependência, o erro retorna. Antes de replay, estime impacto de carga e verifique se o consumidor ainda aceita o schema histórico. Retirar uma mensagem da sequência para continuar as próximas pode violar uma ordem de negócio; para alguns agregados, será necessário bloquear a chave inteira. Guarde o evento original, erro classificado e histórico de tentativas em vez de reescrever a mensagem e perder evidência. A fila vazia não prova que todos os efeitos foram aplicados corretamente.
+      - title: "Backpressure evita transformar atraso em colapso"
+        description: >-
+          Se entram 800 eventos por segundo e o destino processa 500, o backlog cresce 300 por segundo enquanto durar a diferença. A fila compra tempo, não capacidade infinita. Limite trabalho em voo, conexões e tamanho de lote; prefetch em RabbitMQ e controle de polling e processamento em Kafka são mecanismos diferentes para limitar pressão. Aumentar consumidores pode apenas saturar o mesmo banco e piorar todos. Meça idade do evento mais antigo, taxa de entrada, taxa de aplicação, erro e recursos do destino. Ao recuperar, a capacidade precisa exceder a entrada para drenar o acumulado. Declare qual demanda pode ser desacelerada, rejeitada ou degradada antes de esgotar a retenção.
+      - title: "Retenção deve cobrir a interrupção e a drenagem"
+        description: >-
+          Dimensionar retenção apenas para a duração esperada de uma falha ignora a recuperação. Se um consumidor ficou parado seis horas e leva outras quatro para alcançar a entrada, eventos antigos precisam continuar disponíveis durante esse percurso. A reserva de bytes também depende de compressão, replicação e políticas por tamanho que podem eliminar dados antes do prazo nominal por tempo. Teste um consumidor atrasado e confira a posição mais antiga disponível. Separadamente, defina a janela de deduplicação e de suporte a schemas históricos. Quando o tempo de reconstrução excede a retenção viável do broker, mantenha outra fonte de replay ou um procedimento de snapshot coordenado, com custo e prazo conhecidos.
+  - id: contratos
+    name: "Contratos, reprocessamento e evidência"
+    entries:
+      - title: "O contrato inclui semântica e tempo"
+        description: >-
+          Um schema registra tipos e obrigatoriedade, mas não esclarece moeda, timezone, unidade, identidade nem significado de cancelado. Inclua event_id, tipo, versão, chave do agregado, sequência quando necessária, instante do fato e identificador de correlação. Adicionar campo opcional costuma permitir leitores antigos, mas depende do formato e de seus validadores. Renomear um campo ou mudar o significado sem mudar o tipo também pode quebrar consumidores. Teste produtores novos com leitores antigos e dados históricos com leitores novos. Um schema registry ajuda a aplicar políticas de compatibilidade; não substitui testes semânticos nem governança sobre quem pode publicar e consumir informações sensíveis.
+        codeLanguage: json
+        code: |-
+          {
+            "event_id": "20000000-0000-0000-0000-000000000042",
+            "type": "PedidoConfirmado",
+            "schema_version": 1,
+            "aggregate_id": "42",
+            "aggregate_version": 2,
+            "occurred_at": "2026-10-25T12:00:00Z",
+            "correlation_id": "operacao-42",
+            "data": {"total_centavos": 2590, "moeda": "BRL"}
+          }
+      - title: "Replay precisa distinguir reconstrução e efeito externo"
+        description: >-
+          Refazer uma projeção em uma tabela nova permite comparar resultados antes de trocar a leitura. Reenviar emails ou cobranças durante esse replay pode causar dano. Separe consumidores de projeção de consumidores que executam efeitos e mantenha identidade de negócio estável. Se eventos antigos forem reaplicados a estado recente, use versão para rejeitar regressão ou reconstrua desde um ponto consistente. Offsets do broker descrevem progresso de leitura, não validade do resultado produzido por uma versão defeituosa do código. Registre versão do consumidor, posição inicial e final, contagens, erros e invariantes verificados. Depois da correção, um novo grupo ou destino isolado ajuda a comparar sem destruir a evidência anterior.
+  - id: avaliacao
+    name: "Exercícios e referências"
+    entries:
+      - title: "Encontrar a fronteira que falhou"
+        description: "Use uma linha do tempo, escreva os estados persistidos e só depois proponha uma correção. Uma resposta que apenas recomenda trocar de broker deixa as janelas de falha sem explicação."
+        contentBlocks:
+          - type: exercise
+            prompt: "O consumidor atualiza o saldo, cai antes de confirmar a mensagem e recebe o mesmo evento novamente. Um cache de event_ids em memória resolve? Desenhe uma correção e seu limite."
+            answer: "O cache desaparece no reinício e não coordena trabalhadores concorrentes. Grave event_id com restrição única e a alteração do saldo na mesma transação; confirme depois do commit. Um retry com a mesma identidade encontra a Inbox e não repete o saldo. Se o efeito for uma API externa, a transação local não basta: a API deve oferecer chave idempotente ou será necessário conciliar o resultado incerto. A retenção da Inbox precisa cobrir a janela de replay."
+            rubric:
+              [
+                "Localizar a queda entre efeito e ack",
+                "Exigir atomicidade da deduplicação com o efeito",
+                "Explicitar limite para efeitos externos",
+              ]
+          - type: exercise
+            prompt: "Após 20 minutos com entrada de 800/s e processamento de 500/s, qual backlog se acumulou? Recuperando para 1000/s sem mudar a entrada, quanto demora para drenar?"
+            answer: "A diferença é 300/s durante 1200 segundos: 360.000 eventos. Com 1000/s de serviço e 800/s de chegada, a drenagem líquida é 200/s; serão 1800 segundos, ou 30 minutos, sem novos picos ou erros. São hipóteses determinísticas de capacidade, não medições nem percentis de latência. Valide o consumo real por amostragem e dimensione também bytes e retenção."
+            rubric:
+              [
+                "Usar diferença entre entrada e saída",
+                "Converter minutos em segundos",
+                "Separar hipótese de dado medido",
+              ]
+      - title: "Referências de protocolo e implementação"
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "Kafka 3.9 — design e semânticas de entrega"
+                url: "https://kafka.apache.org/39/design/design/"
+              - label: "RabbitMQ — acknowledgements e publisher confirms"
+                url: "https://www.rabbitmq.com/docs/confirms"
+              - label: "RabbitMQ — prefetch por consumidor"
+                url: "https://www.rabbitmq.com/docs/consumer-prefetch"
+              - label: "Amazon SQS — repetição em filas Standard"
+                url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html"
+              - label: "Amazon SQS — investigação e redrive de DLQs"
+                url: "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html"
+              - label: "Debezium 3.3 — Outbox Event Router"
+                url: "https://debezium.io/documentation/reference/3.3/transformations/outbox-event-router.html"

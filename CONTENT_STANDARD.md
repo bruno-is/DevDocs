@@ -135,7 +135,27 @@ A busca aberta numa tecnologia ou guia começa nessa tecnologia, com seletor
 visível para ampliar para todas. A home continua global. O filtro `tech` do
 Pagefind deriva da coleção, sem listas de páginas ou palavras especiais.
 
-## Checklist Antes De Propagar
+## Unidades da formação
+
+`learning` é opcional e não altera guias de consulta existentes. Em `sistemas`,
+declare `module`, `level`, `prerequisites` (IDs completos) e `objectives`
+verificáveis. `kind` pode ser `orientation`, `chapter` (padrão), `laboratory`
+ou `project`. Use `order` único e pré-requisitos anteriores; a validação é
+compartilhada pelo build e por `npm test`.
+
+Uma aula deve explicar mecanismo, aplicação, fronteiras de falha e critérios
+de decisão. Separe hipótese, resultado esperado e medição. Não publique tempos
+fictícios nem apresente configuração revisada como laboratório executado.
+
+- `exercise`: `prompt`, `answer` e `rubric` (lista não vazia). O gabarito é
+  recolhível por HTML nativo; explique por que a resposta preserva o contrato.
+- `diagram`: `caption` e `nodes` com `label`/`detail`. Representa uma sequência
+  anotada em ordem de leitura; topologias com ramificações exigem explicação
+  explícita ou os blocos arquiteturais existentes.
+- `sources`: `items` com `label` e `url` HTTPS. Prefira fontes primárias
+  versionadas. URLs externas pertencem a esse bloco, não a Markdown na prosa.
+
+## Checklist Antes De Propagar (todos os guias)
 
 - `npm run check` passa.
 - `npm run build` passa.

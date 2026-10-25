@@ -1,0 +1,210 @@
+id: sistemas-transacoes
+title: "Sistemas: transações, concorrência e recuperação"
+subtitle: Preserve invariantes com MVCC, isolamento, locks e logs; investigue o que acontece quando duas operações ou uma falha se encontram.
+cardDescription: Observe concorrência e raciocine sobre durabilidade antes de estudar replicação e CDC.
+tech: sistemas
+order: 30
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: Transações e recuperação
+  level: intermediario
+  prerequisites: [sistemas-bancos-internos]
+  objectives:
+    - Definir invariantes de negócio e identificar lost update e write skew.
+    - Comparar o isolamento do PostgreSQL 17 e do InnoDB no MySQL 8.4.
+    - Reproduzir espera por lock em duas sessões e explicar uma estratégia de correção.
+    - Distinguir WAL, redo, undo, binlog, checkpoint e backup.
+quickStart:
+  title: A unidade de correção é a regra de negócio
+  kicker: Banco local descartável
+  description: O experimento usa duas sessões psql conectadas ao mesmo PostgreSQL 17. Os comandos foram preparados para laboratório; não pressupõem acesso a produção e não representam resultados de desempenho medidos. Encerre transações abertas mesmo quando interromper o estudo.
+  steps:
+    - Escreva primeiro a regra que precisa permanecer verdadeira.
+    - Preveja a ordem dos eventos das duas sessões.
+    - Execute as etapas na ordem indicada e compare o estado final.
+sections:
+  - id: invariantes-e-acid
+    name: Invariantes e ACID
+    entries:
+      - title: Uma transação não adivinha sua regra
+        description: >-
+          Uma invariante é uma propriedade que precisa permanecer verdadeira, como saldo não negativo ou apenas uma reserva ativa por assento. BEGIN e COMMIT agrupam instruções, mas não corrigem um algoritmo que lê um valor antigo e depois o sobrescreve. Comece expressando a regra em constraints e operações atômicas quando possível. Uma restrição UNIQUE protege unicidade mesmo com dois processos; uma verificação apenas na API abre uma janela entre consultar e inserir. Algumas regras envolvem várias linhas e exigem coordenação adicional. Defina também o ponto em que o negócio considera a operação concluída. Se uma transferência precisa atualizar dois saldos no mesmo banco, faça as mudanças na mesma transação e valide a regra antes do commit. Efeitos externos exigem outro protocolo.
+        tags: [invariante, constraint, UNIQUE, transação]
+      - title: As letras de ACID delimitam um contrato
+        description: >-
+          Atomicidade agrupa efeitos da transação: eles não devem ficar parcialmente confirmados no banco. Consistência, nesse contexto, preserva regras declaradas e corretamente implementadas; não é sinônimo de consistência forte entre réplicas. Isolamento define interações permitidas entre transações concorrentes. Durabilidade trata a sobrevivência do commit diante das falhas contempladas e da configuração escolhida. Um banco não protege automaticamente dados que a aplicação deixou em memória nem desfaz um e-mail enviado no meio de uma transação. Hardware, sincronização, armazenamento e replicação alteram a fronteira de falha. Ao comparar uma solução mais rápida, pergunte se o teste manteve o mesmo contrato de durabilidade e o mesmo isolamento. Desligar uma garantia e medir ganho não demonstra uma otimização equivalente.
+        contentBlocks:
+          - type: diagram
+            caption: Uma transferência precisa de confirmação conjunta; o log sustenta a recuperação posterior.
+            nodes:
+              - label: Validar e iniciar
+                detail: Identifique a operação e as contas que participarão da regra.
+              - label: Alterar sob coordenação
+                detail: Debite e credite dentro da mesma transação, com restrições apropriadas.
+              - label: Commit durável
+                detail: O banco confirma conforme suas condições de log e persistência.
+              - label: Comunicar o resultado
+                detail: Uma resposta perdida exige reconciliação pela identidade da operação.
+  - id: mvcc-e-isolamento
+    name: MVCC e níveis de isolamento
+    entries:
+      - title: MVCC escolhe uma versão visível
+        description: >-
+          Multi-version concurrency control mantém informações que permitem a uma leitura escolher versões de dados de acordo com um snapshot. Em vez de obrigar toda leitura a esperar por toda escrita, o banco pode apresentar uma versão compatível com aquele instante lógico. Isso não significa ausência de locks: duas escritas conflitantes ainda precisam de coordenação. No PostgreSQL, atualizações normalmente criam novas versões de tupla e vacuum trata as antigas quando seguro. InnoDB usa informações undo para reconstruir versões anteriores. As implementações têm estruturas e custos diferentes. Um leitor longo pode prolongar a vida das versões e aumentar trabalho de manutenção. O snapshot também não representa um backup independente: ele depende do banco e de suas estruturas continuarem disponíveis.
+        tags: [MVCC, snapshot, versão, visibilidade]
+      - title: READ COMMITTED pode ver dois momentos na mesma transação
+        description: >-
+          No PostgreSQL 17, READ COMMITTED é o padrão e cada comando obtém seu snapshot das mudanças confirmadas antes de começar, além de enxergar suas próprias alterações. Dois SELECTs na mesma transação podem retornar valores diferentes após um commit concorrente. READ UNCOMMITTED é tratado como READ COMMITTED. REPEATABLE READ mantém uma visão estável para leituras comuns a partir do primeiro comando relevante, mas ainda admite anomalias de serialização. SERIALIZABLE procura garantir resultado equivalente a alguma execução serial e pode abortar transações que precisam ser repetidas. No InnoDB do MySQL 8.4, o padrão é REPEATABLE READ; leituras consistentes e leituras com lock possuem regras distintas. Não deduza resultados somente pelo nome do nível ou transporte um roteiro entre motores sem reavaliá-lo.
+        contentBlocks:
+          - type: comparison-block
+            title: Declare o motor ao falar do padrão
+            columns:
+              - title: PostgreSQL 17
+                items:
+                  [
+                    READ COMMITTED por padrão,
+                    Snapshot por comando nesse nível,
+                    SERIALIZABLE pode exigir retry,
+                  ]
+              - title: InnoDB no MySQL 8.4
+                items:
+                  [
+                    REPEATABLE READ por padrão,
+                    Distingue consistent reads e locking reads,
+                    Gap e next-key locks dependem do acesso e isolamento,
+                  ]
+      - title: Lost update e write skew têm estruturas diferentes
+        description: >-
+          Lost update ocorre quando uma decisão baseada em um valor lido é sobrescrita por outra atualização sem preservar ambos os efeitos pretendidos. Exemplo: dois workers leem estoque 10, calculam 9 e gravam 9; foram feitas duas reservas, mas apenas uma unidade foi descontada. Uma atualização relativa e condicional pode preservar a regra em uma única instrução. Write skew é mais sutil: dois plantonistas veem que o outro está ativo e cada um desativa sua própria linha; ninguém continua de plantão. As escritas não disputam a mesma linha, mas violam uma regra sobre o conjunto. Snapshot estável não resolve sozinho. Alternativas incluem serializable com retry, bloquear uma linha comum que represente o recurso ou reformular a invariante. Escolha pela regra e pela contenção aceitável.
+        code: |-
+          UPDATE estoque_estudo
+          SET quantidade = quantidade - 1
+          WHERE produto_id = 1 AND quantidade > 0
+          RETURNING quantidade;
+        callout:
+          type: hint
+          label: PostgreSQL 17
+          text: A tabela será criada no experimento adiante. Uma linha retornada representa a reserva realizada; nenhuma linha exige tratar falta de estoque ou ID inexistente. O resultado ainda só fica confirmado após COMMIT.
+        tags: [lost update, write skew, anomalia, estoque]
+  - id: locks-e-concorrencia
+    name: Locks, conflitos e limites
+    entries:
+      - title: Bloqueio pessimista protege uma região conhecida
+        description: >-
+          SELECT FOR UPDATE permite adquirir um lock das linhas selecionadas antes de calcular uma alteração. Funciona quando o conjunto protegido e a ordem de acesso são bem definidos. Manter uma transação aberta enquanto chama uma API externa prolonga locks e prende conexões; coloque trabalho lento fora da região crítica quando a correção permitir. Bloquear linhas existentes não impede automaticamente qualquer linha nova que faria parte de um predicado; a solução depende do motor e do isolamento. No PostgreSQL, um lock de linha não bloqueia uma leitura MVCC comum da mesma forma que outra escrita conflitante. Para diagnosticar, procure quem bloqueia, há quanto tempo, qual transação permanece aberta e qual operação segura o recurso, em vez de reiniciar todos os processos.
+        tags: [FOR UPDATE, lock, bloqueio pessimista, transação longa]
+      - title: Controle otimista detecta uma decisão vencida
+        description: >-
+          Uma coluna de versão permite atualizar somente se o estado continua igual ao observado. O cliente lê versão 4 e tenta UPDATE com WHERE versao = 4; se outra alteração avançou para 5, nenhuma linha é modificada. A aplicação deve resolver o conflito, recalcular ou informar ao usuário. Não repita o mesmo resultado calculado sobre uma versão antiga. O método é útil para edição de chamados com conflitos raros e evita manter lock durante o tempo de pensamento humano. Sob contenção alta, muitas tentativas descartadas podem custar mais que uma coordenação curta. Uma constraint continua necessária para invariantes estruturais. Idempotência e controle otimista também são perguntas diferentes: uma repetição pode ser a mesma operação, enquanto um conflito pode vir de outra operação legítima.
+        code: |-
+          UPDATE chamados
+          SET estado = 'resolvido', versao = versao + 1
+          WHERE id = 42 AND versao = 4;
+        tags: [concorrência otimista, versão, compare and swap, conflito]
+      - title: Deadlock é um ciclo de espera, não apenas lentidão
+        description: >-
+          Se A segura a linha 1 e espera pela 2, enquanto B segura a 2 e espera pela 1, forma-se um ciclo. O banco pode detectar o deadlock e abortar uma participante; não existe garantia de que será a sessão que você prefere. A aplicação precisa tratar o erro e repetir a transação inteira quando for seguro. Uma ordem consistente de aquisição, como sempre acessar contas pelo menor ID primeiro, reduz essa classe de ciclo. Transações pequenas e índices adequados reduzem a região de disputa. Lock timeout limita espera e deadlock detection encontra ciclos: são mecanismos diferentes. Registre evidências antes de encerrar uma sessão; matar quem espera não explica quem segurou o lock nem corrige o fluxo que criou a disputa.
+        contentBlocks:
+          - type: flow-steps
+            title: Política de retry transacional
+            steps:
+              - Reconheça apenas erros transitórios previstos, como serialização ou deadlock.
+              - Desfaça a tentativa e reinicie desde as leituras que orientam a decisão.
+              - Use poucas tentativas, prazo total e backoff com jitter.
+              - Preserve a identidade da operação e não repita efeitos externos já realizados.
+  - id: laboratorio-concorrencia
+    name: Experimento com duas sessões
+    entries:
+      - title: Prepare a base e observe uma escrita bloqueada
+        kicker: Somente PostgreSQL 17 local e descartável
+        description: >-
+          Abra duas sessões psql na mesma base, chamadas A e B. Na A, execute o preparo abaixo fora de uma transação existente. Depois execute BEGIN; UPDATE estoque_estudo SET quantidade = quantidade - 1 WHERE produto_id = 1; e deixe a transação aberta. Na B, execute a atualização condicional da próxima entry. Ela deverá esperar pelo lock da A, salvo timeout ou interferência externa. Não confunda a espera com falha do cliente. Se você interromper B, use ROLLBACK para encerrar sua tentativa. Este roteiro demonstra coordenação de uma única linha; não mede escalabilidade e não reproduz todos os níveis de isolamento.
+        code: |-
+          CREATE TABLE estoque_estudo (
+            produto_id integer PRIMARY KEY,
+            quantidade integer NOT NULL CHECK (quantidade >= 0)
+          );
+          INSERT INTO estoque_estudo VALUES (1, 2);
+
+          BEGIN;
+          UPDATE estoque_estudo
+          SET quantidade = quantidade - 1
+          WHERE produto_id = 1;
+      - title: Sessão B reavalia a condição depois da espera
+        description: >-
+          Enquanto A mantém a alteração aberta, execute este bloco na B até o UPDATE. Volte à A e execute COMMIT. Em READ COMMITTED no PostgreSQL, B pode prosseguir e reavaliar a condição da atualização sobre a versão concorrente confirmada. Como o valor inicial era 2 e A retirou 1, B deve conseguir retirar a unidade restante, retornando 0. Execute o COMMIT da B apenas após observar o retorno. Uma nova tentativa condicional não encontra quantidade positiva e não altera nenhuma linha. Se o valor inicial ou a ordem diferir, o resultado também muda. Registre os eventos em ordem: começo, lock, liberação, linha retornada e confirmação; esse histórico explica o resultado melhor que uma captura isolada.
+        code: |-
+          BEGIN;
+          SET LOCAL lock_timeout = '30s';
+          UPDATE estoque_estudo
+          SET quantidade = quantidade - 1
+          WHERE produto_id = 1 AND quantidade > 0
+          RETURNING quantidade;
+          COMMIT;
+
+          SELECT * FROM estoque_estudo;
+      - title: Compare uma decisão no cliente e encerre o ambiente
+        description: >-
+          Para observar uma perda lógica, reinicie o estoque em 2 com todas as transações anteriores encerradas. Em A e B, faça SELECT quantidade e calcule no cliente o literal 1. A grava SET quantidade = 1 e confirma. B grava o mesmo literal e confirma depois. O estado final 1 não representa as duas retiradas pretendidas. Compare com a expressão relativa e condicional anterior, que faz a decisão e a alteração sob controle do banco. Ao terminar, confirme que nenhuma sessão ficou idle in transaction, encerre tentativas com ROLLBACK e remova somente a tabela de estudo. Uma execução real pode ser afetada por outros clientes e configurações; use uma base dedicada para isolar o experimento.
+        code: |-
+          UPDATE estoque_estudo SET quantidade = 2 WHERE produto_id = 1;
+          SELECT produto_id, quantidade FROM estoque_estudo;
+
+          SELECT pid, state, wait_event_type, wait_event,
+                 pg_blocking_pids(pid) AS bloqueadores
+          FROM pg_stat_activity
+          WHERE datname = current_database();
+        callout:
+          type: danger
+          label: Limpeza restrita ao laboratório
+          text: Depois de encerrar as transações em A e B, execute DROP TABLE estoque_estudo somente na base descartável que você criou. Isso apaga a tabela e seus dados de estudo.
+  - id: logs-e-recuperacao
+    name: Logs, commit e recuperação
+    entries:
+      - title: WAL permite confirmar sem sincronizar todas as páginas
+        description: >-
+          Write-ahead logging estabelece uma ordem: o registro que permite recuperar uma alteração precisa estar persistido antes de a página correspondente ser gravada como durável. Isso possibilita agrupar escrita de páginas e usar o log na recuperação após crash. No PostgreSQL, a condição de confirmação depende de parâmetros como synchronous_commit e de eventual replicação síncrona. O cliente deve saber qual falha sua confirmação cobre. Um checkpoint reduz o trecho de recuperação necessário e organiza avanço do estado persistido; não é uma cópia independente que permite voltar a qualquer instante. Desligamento de processo, perda de disco e corrupção são cenários diferentes. Se o único disco desaparece, seu log local também pode desaparecer. Durabilidade local não elimina a necessidade de backup.
+        tags: [WAL, write ahead log, commit, checkpoint, durabilidade]
+      - title: Redo, undo e binlog possuem responsabilidades distintas
+        description: >-
+          No InnoDB, redo permite refazer alterações de estruturas após uma falha; undo sustenta reversão e reconstrução de versões antigas. O binlog do servidor MySQL registra mudanças para finalidades como replicação e recuperação lógica, com formatos e opções próprios. Não use os nomes como sinônimos. As configurações innodb_flush_log_at_trx_commit e sync_binlog participam da avaliação de durabilidade, e seu efeito precisa ser examinado junto ao armazenamento e ao fluxo transacional da versão adotada. No PostgreSQL, WAL não deve ser descrito como um undo log equivalente ao do InnoDB. Para CDC, o conector interpreta a fonte e seu protocolo apropriado, não qualquer arquivo com a palavra log. Entender essa distinção impede confundir recuperação interna, integração e auditoria de negócio.
+        tags: [redo, undo, binlog, InnoDB, recuperação]
+      - title: Recuperação precisa de um histórico que você consegue restaurar
+        description: >-
+          Um backup físico com os logs necessários pode permitir point-in-time recovery, conforme o produto e o procedimento. O objetivo é reconstruir um estado consistente em um ponto anterior à falha ou ao erro. Uma réplica costuma propagar também um DELETE acidental; por isso não substitui histórico independente. Verifique cadeia de arquivos, permissões, chaves de criptografia, retenção e compatibilidade da versão. RPO descreve perda tolerável de dados e RTO o tempo tolerável até recuperação do serviço: ambos precisam de medição e exercício. Um arquivo existente não prova restauração. Para validar, restaure em ambiente isolado, execute verificações de integridade e confirme invariantes e continuidade dos consumidores. Depois de voltar o banco no tempo, eventos já enviados podem existir fora dele; planeje reconciliação.
+        contentBlocks:
+          - type: exercise
+            prompt: O banco voltou após crash e contém o chamado. O cliente repetiu a criação e surgiram dois chamados. O WAL falhou? Explique a fronteira de cada garantia.
+            answer: O estado recuperado indica que a persistência local pode ter funcionado. WAL não deduplica operações de negócio enviadas como pedidos distintos. A resposta pode ter se perdido após o primeiro commit; a API precisava de identidade idempotente e registro durável do resultado. Investigue commits, chaves e logs antes de concluir, e reconcilie duplicações existentes.
+            rubric:
+              - Separa recuperação física de deduplicação de negócio.
+              - Reconstrói a janela entre commit e resposta.
+              - Propõe evidência e correção sem prometer exactly-once irrestrito.
+  - id: avaliacao-e-fontes
+    name: Avaliação e fontes
+    entries:
+      - title: Escolha coordenação a partir da invariante
+        contentBlocks:
+          - type: exercise
+            prompt: Dois médicos podem sair de plantão desde que pelo menos um continue ativo. Cada um atualiza sua própria linha após ler o conjunto. Um snapshot estável é suficiente? Compare duas correções e seus custos.
+            answer: Não; as decisões podem observar dois ativos e gravar linhas distintas, produzindo write skew. Uma opção é serializable com retry completo e efeitos externos controlados. Outra é todos os participantes bloquearem primeiro uma linha comum do plantão e revalidarem a regra, inclusive nos fluxos de entrada e saída. A primeira exige lidar com abortos; a segunda serializa aquele recurso e exige disciplina de todos os escritores. Uma constraint simples por linha não representa sozinha essa regra sobre o conjunto.
+            rubric:
+              - Identifica write skew sem exigir disputa na mesma linha.
+              - Explica duas alternativas com comportamento sob conflito.
+              - Define onde revalidar e o que repetir.
+          - type: sources
+            title: Referências das implementações
+            items:
+              - label: PostgreSQL 17 — isolamento e anomalias
+                url: https://www.postgresql.org/docs/17/transaction-iso.html
+              - label: PostgreSQL 17 — locks explícitos e deadlocks
+                url: https://www.postgresql.org/docs/17/explicit-locking.html
+              - label: PostgreSQL 17 — princípio de WAL
+                url: https://www.postgresql.org/docs/17/wal-intro.html
+              - label: MySQL 8.4 — isolamento do InnoDB
+                url: https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html
+              - label: MySQL 8.4 — redo log
+                url: https://dev.mysql.com/doc/refman/8.4/en/innodb-redo-log.html
+              - label: MySQL 8.4 — undo logs
+                url: https://dev.mysql.com/doc/refman/8.4/en/innodb-undo-logs.html

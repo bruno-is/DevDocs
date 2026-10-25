@@ -1,0 +1,160 @@
+id: sistemas-replicacao
+title: "Replicação, consenso e distribuição"
+subtitle: "Escolher onde uma escrita se torna definitiva, como um líder pode mudar e quais dados sobrevivem a uma falha."
+cardDescription: "Consistência, quorum, failover, sharding e transações entre nós."
+tech: sistemas
+order: 50
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: "Distribuição e consistência"
+  level: avancado
+  prerequisites: [sistemas-transacoes, sistemas-modelagem]
+  objectives:
+    - "Desenhar o caminho de confirmação de uma escrita e identificar sua janela de perda."
+    - "Distinguir consenso, replicação, particionamento e recuperação de desastre."
+    - "Escolher uma chave de distribuição e justificar o custo de operações entre shards."
+sections:
+  - id: topologias
+    name: "O que está sendo distribuído"
+    entries:
+      - title: "Cluster é uma organização, não uma garantia"
+        kicker: "Comece pela unidade de estado"
+        description: >-
+          Um cluster reúne processos que cooperam; o substantivo não informa o protocolo. Um cluster Kubernetes agenda Pods, um replica set mantém cópias de dados e um conjunto de shards divide a propriedade de registros. Uma implantação pode reunir os três. Pergunte quem aceita escritas, onde ficam as cópias, quem decide uma promoção e qual confirmação o cliente recebe. Três processos no mesmo notebook continuam sujeitos à perda do notebook. Três zonas reduzem esse domínio de falha, mas compartilham outras dependências, como credenciais, configuração e região. A disponibilidade resulta desses caminhos e das falhas toleradas, não da contagem de instâncias. Um desenho útil anota essas responsabilidades antes de selecionar produtos.
+        tags: [cluster, topologia, dominio de falha, disponibilidade]
+      - title: "Replicar copia; particionar divide"
+        description: >-
+          Na replicação, duas instâncias mantêm representações do mesmo conjunto de dados. No sharding, cada partição possui apenas parte do conjunto, normalmente determinada por uma chave. Cada shard pode, por sua vez, ter réplicas. Adicionar uma réplica pode distribuir leituras tolerantes a atraso e fornecer candidato a failover; não distribui automaticamente a execução de escritas de um único primary. Particionar uma tabela dentro de um PostgreSQL também não cria servidores adicionais: as partições ainda podem disputar os mesmos discos e CPU. Antes de distribuir fisicamente, meça consulta, índices, contenção, memória e I/O. Uma complexidade nova deve resolver um limite observado e incluir custo de operação, migração e recuperação.
+        contentBlocks:
+          - type: comparison-block
+            title: "Qual problema precisa mudar?"
+            columns:
+              - title: "Replicação"
+                items:
+                  [
+                    "Cópias e candidatos a recuperação",
+                    "Leituras com contrato explícito de frescor",
+                    "Custo adicional por escrita replicada",
+                  ]
+              - title: "Sharding"
+                items:
+                  [
+                    "Distribuição de dados e carga",
+                    "Roteamento por chave e rebalanceamento",
+                    "Joins e transações entre shards mais caros",
+                  ]
+      - title: "Replicação física e lógica"
+        description: >-
+          A replicação física do PostgreSQL transporta registros de WAL para reproduzir alterações de armazenamento numa instância compatível. A lógica traduz alterações em operações sobre objetos e permite selecionar tabelas e integrar representações diferentes. Isso muda requisitos de identidade das linhas, evolução de schema e tratamento de conflitos. Uma cópia física tende a acompanhar a estrutura inteira da instância; uma projeção lógica pode conter somente parte dos dados e não ser candidata equivalente a promoção. No MySQL, o binlog e suas opções formam outro mecanismo, distinto dos redo logs do InnoDB. Identifique o log e o protocolo de cada implementação: usar a palavra replicação para ambos não torna seus procedimentos de failover intercambiáveis.
+  - id: confirmacao
+    name: "Confirmação, atraso e modelos de leitura"
+    entries:
+      - title: "O momento do sucesso define a janela de perda"
+        description: >-
+          Considere uma confirmação ao cliente depois de persistir localmente, antes de outra máquina receber a escrita. Se o primary e seu armazenamento desaparecerem nesse intervalo, promover uma réplica pode perder uma operação que o cliente considerava concluída. Replicação síncrona acrescenta uma condição remota ao caminho de confirmação e aumenta a latência e a dependência desses participantes. Especifique o estágio exigido: receber em memória, persistir ou aplicar para leitura são eventos diferentes. No PostgreSQL 17, synchronous_commit e synchronous_standby_names configuram partes desse contrato; nenhuma configuração resolve sozinha roteamento, eleição e isolamento do antigo primary. O aluno deve conseguir marcar no diagrama exatamente qual falha ainda causa perda depois de cada confirmação.
+        contentBlocks:
+          - type: diagram
+            caption: "Uma escrita com réplica: a política escolhe até onde esperar antes de responder."
+            nodes:
+              - label: "Aplicação envia COMMIT"
+                detail: "A operação pode ter resultado incerto se a conexão cair."
+              - label: "Primary persiste WAL"
+                detail: "Durabilidade local depende da configuração e do armazenamento."
+              - label: "Réplica recebe e persiste"
+                detail: "O transporte acrescenta uma dependência de rede."
+              - label: "Réplica aplica"
+                detail: "Somente agora uma leitura nela pode observar a alteração."
+      - title: "Replica lag é uma família de distâncias"
+        description: >-
+          A réplica pode estar distante em bytes de log, transações, tempo de aplicação ou idade da última alteração de negócio. Cada métrica responde uma pergunta diferente. Se o primary estiver ocioso, a idade de uma amostra não equivale a trabalho pendente. Se uma transação muito grande estiver sendo aplicada, poucos registros visíveis podem esconder muito trabalho. Separe transporte, persistência e replay; compare taxas de produção e consumo. Não use apenas uma média global para autorizar leituras que exigem frescor. Para a tela que acabou de confirmar um pedido, leia do primary, use afinidade de sessão temporária ou espere uma posição comprovadamente aplicada. Cada opção troca latência, capacidade e complexidade por uma garantia específica.
+        code: |-
+          SELECT application_name, state, sync_state,
+                 sent_lsn, write_lsn, flush_lsn, replay_lsn
+          FROM pg_stat_replication;
+        callout:
+          type: hint
+          label: "Diagnóstico no PostgreSQL 17"
+          text: "A consulta roda no primary com permissão de monitoramento. Ausência de linhas também exige investigar conexão e configuração; não significa atraso zero."
+      - title: "Consistência descreve histórias permitidas"
+        description: >-
+          Linearizabilidade faz cada operação parecer ocorrer num instante entre sua chamada e resposta, respeitando a ordem do tempo real. Serializabilidade ordena transações como uma execução serial; sozinha não exige essa correspondência com tempo real. Consistência causal preserva relações como ler uma atualização antes de publicar uma resposta dependente dela. Consistência eventual promete convergência sob suas hipóteses de entrega e resolução, sem fornecer necessariamente um prazo máximo. Uma mesma plataforma pode oferecer contratos diferentes por operação. Escreva uma história de duas sessões, com leituras e confirmações, e declare quais resultados são proibidos. A expressão consistência forte, sem definir operações, falhas e escopo, não basta para decidir se uma réplica atende uma tela financeira.
+  - id: lideranca
+    name: "Liderança, quorum e falhas"
+    entries:
+      - title: "Um timeout é suspeita, não prova de morte"
+        description: >-
+          Durante uma partição de rede, um observador não distingue imediatamente um processo parado de outro lento ou inacessível. Se os dois lados se promoverem independentemente, poderão aceitar alterações conflitantes: split-brain. Um failover seguro precisa escolher um candidato com estado adequado, impedir que o líder antigo continue escrevendo e redirecionar clientes. Fencing é essa exclusão verificável, por desligamento controlado ou por um token de época que o recurso protegido rejeita quando antigo. Um lock com validade expirada não impede que um processo pausado acorde e finalize uma escrita. O sistema que recebe a operação deve reconhecer a autoridade vigente; confiança na intenção do cliente não constitui isolamento.
+      - title: "O que uma maioria realmente resolve"
+        description: >-
+          Num grupo fixo de três votantes, maiorias de dois sempre se intersectam; num grupo de cinco, a maioria é três. Essa interseção ajuda protocolos a transportar informação entre decisões. Ela não torna qualquer política de duas respostas consistente: é preciso definir estado persistente, versões, regras de voto e aceitação. Em Raft, termos organizam épocas, votos restringem eleições e o líder replica um log ordenado. Confirmações e a regra de atualização do log preservam entradas comprometidas em eleições futuras sob o modelo de falhas assumido. Raft tolera paradas e recuperação com armazenamento correto; não é um protocolo para participantes maliciosos. Acrescentar votantes aumenta custo de coordenação e não substitui distribuir corretamente os domínios de falha.
+      - title: "Failover termina somente depois da reconciliação"
+        description: >-
+          Promover um novo primary muda a história que será considerada autoritativa. Clientes com timeout podem ter operações já confirmadas no banco, mas sem resposta recebida; devem consultar por identificador idempotente antes de repetir efeitos. O antigo primary pode conter escritas ausentes no novo. Antes de reintegrá-lo, preserve evidências, compare posições e siga um procedimento compatível para reconstruir sua cópia. Failback é uma nova mudança de liderança, não desfazer um botão. Teste também DNS, pools de conexão e consumidores com sessões antigas: uma eleição bem-sucedida não garante recuperação da aplicação. O runbook precisa declarar RPO, RTO, pontos de decisão, responsável e critérios de integridade de negócio após a retomada.
+  - id: limites
+    name: "Limites formais e coordenação"
+    entries:
+      - title: "CAP e PACELC sem o triângulo de marketing"
+        description: >-
+          CAP trata de um modelo de sistema em que partições podem impedir comunicação. Nessa situação, não se consegue garantir simultaneamente a consistência linearizável definida pelo modelo e a resposta de todas as requisições dirigidas a nós não falhos. Disponibilidade formal aqui não é um percentual de uptime. A decisão prática pode variar por operação: bloquear a reserva de estoque para preservar seu invariante e aceitar um comentário que será reconciliado depois. Fora de partições, ainda existe custo de coordenação: PACELC organiza a discussão entre latência e consistência. Não rotule um produto inteiro como duas letras sem descrever configuração, operação e hipótese. Examine os resultados observáveis pelo cliente sob perda de comunicação e sob operação normal.
+      - title: "2PC e consenso respondem perguntas diferentes"
+        description: >-
+          Two-phase commit coordena uma decisão atômica entre participantes: primeiro cada um prepara e promete condições para concluir; depois o coordenador comunica commit ou abort. Um participante preparado pode manter recursos bloqueados enquanto não conhece a decisão. Consenso decide um valor ou sequência entre réplicas diante de falhas. Um coordenador de 2PC replicado por consenso melhora sua recuperação, mas não elimina os custos de preparar participantes, esperar redes e manter invariantes entre shards. Para um pedido e uma cobrança externa, prefira reconhecer limites de atomicidade e modelar estados e compensações quando não há transação comum. Compensar um pagamento é uma nova operação de negócio, sujeita a falha, não uma viagem no tempo.
+      - title: "Causalidade, relógios e convergência"
+        description: >-
+          Relógios de parede podem divergir ou recuar, portanto escolher o maior timestamp pode descartar uma alteração válida. Relógios lógicos de Lamport preservam uma direção: se A causa B, o contador de A precede o de B; a recíproca não prova causalidade. Vetores conseguem representar concorrência com mais metadados. CRDTs desenham estado ou operações cuja combinação converge sob condições específicas. Um contador que acumula incrementos independentes é um exemplo útil; impor saldo nunca negativo exige coordenação ou distribuição prévia de direitos, porque convergir depois não desfaz um gasto já autorizado. Use essas ferramentas quando conflitos concorrentes fazem parte do domínio, explicando álgebra de merge e invariantes em vez de tratar convergência como solução universal.
+  - id: sharding
+    name: "Escolher a distribuição e pagar seus custos"
+    entries:
+      - title: "Uma boa chave alinha carga, acesso e isolamento"
+        description: >-
+          Distribuir por tenant_id torna consultas de um cliente locais, mas um cliente muito maior cria uma partição quente. Hash uniforme de identificadores distribui armazenamento, porém uma consulta por intervalo temporal pode visitar todos os shards. Particionar por data facilita retenção e concentra escritas recentes. Escreva a distribuição real dos acessos e estime o maior grupo, não apenas a média. Índices globais, roteamento, unicidade e transações entre shards passam a exigir protocolos ou restrições explícitas. Para migrar uma chave, será necessário copiar dados, alcançar alterações concorrentes e mudar o roteador sem duas autoridades divergentes. Essa operação deve ter verificação de completude e um caminho de reversão antes de remover a origem.
+      - title: "Rebalancear consome a capacidade que deveria recuperar"
+        description: >-
+          Copiar uma partição usa banda, leitura, escrita e cache enquanto as requisições normais continuam. Se o cluster já está saturado, a migração pode aumentar latência e atraso de replicação. Reserve capacidade, limite taxa de cópia e monitore o shard mais pressionado. Diferencie carga distribuível de um único registro disputado: nenhuma distribuição elimina serialização quando todas as operações precisam atualizar o mesmo saldo. Na expansão entre regiões, some custo de ida e volta, transferência, observabilidade e recuperação. Uma réplica remota assíncrona pode servir a disaster recovery, mas seu atraso define perda potencial; uma escrita síncrona intercontinental pode proteger outro requisito ao custo de latência e disponibilidade de coordenação.
+  - id: avaliacao
+    name: "Raciocínio, verificação e referências"
+    entries:
+      - title: "Simular antes de operar"
+        description: >-
+          Faça uma tabela com cinco instantes: início, persistência local, persistência remota, aplicação remota e resposta. Interrompa o fluxo em cada intervalo e explique o que o cliente sabe, o que cada nó conserva e quem está autorizado a escrever. Esse exercício separa resultado incerto, perda confirmada e leitura atrasada. Em laboratório, use somente instâncias descartáveis e dados sintéticos; desligar um processo não simula perda de zona nem corrupção de disco. Registre qual hipótese foi realmente testada. Compare contagens e invariantes de negócio depois do failover, porque um endpoint saudável pode coexistir com pedidos ausentes ou duplicados.
+        contentBlocks:
+          - type: exercise
+            prompt: "Um primary confirma o pedido 42. Sua réplica ainda não o aplicou. Após perda definitiva do primary, a aplicação promove a réplica e repete a criação por timeout. Quais resultados são possíveis e como reduzir o risco?"
+            answer: "Não aplicar ainda não prova que o WAL esteja ausente: a réplica pode tê-lo persistido e recuperá-lo. Se nem o recebeu, o pedido confirmado pode ter sido perdido. Se recebeu, uma repetição pode duplicar o efeito sem chave idempotente. Exija o estágio remoto adequado ao RPO, use identificador estável e restrição única, confirme a autoridade por fencing e reconcilie a posição de log antes de liberar tráfego. A réplica pode continuar indisponível durante a investigação; isso é uma troca explícita."
+            rubric:
+              - "Distinguir receber, persistir e aplicar."
+              - "Tratar timeout como resultado incerto."
+              - "Separar durabilidade de idempotência e autoridade de escrita."
+          - type: exercise
+            prompt: "Um grupo Raft com cinco votantes ocupa duas zonas: três numa e dois noutra. Ele tolera perder qualquer zona?"
+            answer: "Não. Perder a zona com três elimina a maioria; os dois remanescentes devem recusar progresso que exija quorum. Perder a zona com dois mantém três votantes, se conseguem se comunicar e atender clientes. Distribuir em três zonas pode permitir tolerar uma zona, dependendo da disposição e das demais dependências. A contagem de falhas de processos não equivale à tolerância de falhas correlacionadas."
+            rubric:
+              [
+                "Calcular maioria três",
+                "Avaliar cada falha de zona separadamente",
+                "Explicitar conectividade e dependências",
+              ]
+      - title: "Leituras para conferir os mecanismos"
+        description: "As versões de documentação são parte do contrato dos exemplos. O artigo de Raft permite verificar as regras que uma explicação de quorum, sozinha, não demonstra. O currículo do MIT serve como referência de progressão, sem equivalência acadêmica ou certificação."
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "PostgreSQL 17 — replicação física e confirmação síncrona"
+                url: "https://www.postgresql.org/docs/17/warm-standby.html"
+              - label: "PostgreSQL 17 — replicação lógica"
+                url: "https://www.postgresql.org/docs/17/logical-replication.html"
+              - label: "Ongaro e Ousterhout — Raft, versão estendida"
+                url: "https://raft.github.io/raft.pdf"
+              - label: "MIT 6.5840 — sequência de sistemas distribuídos"
+                url: "https://pdos.csail.mit.edu/6.824/schedule.html"
+              - label: "PostgreSQL 17 — transações em duas fases"
+                url: "https://www.postgresql.org/docs/17/two-phase.html"
+              - label: "Lamport — tempo, relógios e ordenação de eventos"
+                url: "https://lamport.azurewebsites.net/pubs/time-clocks.pdf"
+              - label: "Abadi — consistência e latência, formulação PACELC"
+                url: "https://www.cs.umd.edu/~abadi/papers/abadi-pacelc.pdf"
+              - label: "Gilbert e Lynch — perspectivas sobre o teorema CAP"
+                url: "https://dspace.mit.edu/entities/publication/dfcb6512-af44-4fc9-8e8b-1a8f28f1b53a"
+              - label: "Shapiro e Preguiça — tipos replicados com operações comutativas"
+                url: "https://arxiv.org/abs/0710.1784"

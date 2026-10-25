@@ -1,0 +1,21 @@
+{
+	"name": "devdocs-postgres",
+	"config": {
+		"connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+		"tasks.max": "1",
+		"database.hostname": "db",
+		"database.port": "5432",
+		"database.user": "cdc",
+		"database.password": "cdc-local-only",
+		"database.dbname": "erp",
+		"topic.prefix": "erp",
+		"table.include.list": "public.tickets",
+		"plugin.name": "pgoutput",
+		"slot.name": "devdocs_slot",
+		"publication.name": "devdocs_pub",
+		"publication.autocreate.mode": "disabled",
+		"snapshot.mode": "initial",
+		"tombstones.on.delete": "true",
+		"heartbeat.interval.ms": "10000"
+	}
+}

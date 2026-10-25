@@ -1,0 +1,325 @@
+id: sistemas-projeto
+title: "Sistemas: projeto integrador de atendimento"
+subtitle: "Projete e opere um ERP fictício de tickets, com escrita transacional, propagação assíncrona, projeção e recuperação verificável."
+cardDescription: "Capstone com requisitos, decisões, fluxo ponta a ponta, falhas, capacidade e critérios de avaliação."
+tech: sistemas
+order: 120
+readerLayout: narrative
+codeLanguage: bash
+learning:
+  module: "Projeto integrador"
+  kind: project
+  level: avancado
+  prerequisites:
+    [sistemas-ciclo-vida, sistemas-confiabilidade, sistemas-laboratorios]
+  objectives:
+    - "Defender uma arquitetura a partir de invariantes, carga e objetivos explícitos."
+    - "Executar o fluxo API, commit, outbox, inbox e projeção do projeto local."
+    - "Explicar janelas de falha e planejar a evolução para CDC sem promessas excessivas."
+    - "Entregar evidências de recuperação e uma análise de capacidade com hipóteses."
+sections:
+  - id: problema
+    name: "Problema e contratos"
+    entries:
+      - title: "Um ticket aceito precisa continuar existindo"
+        description: >-
+          Uma plataforma fictícia recebe tickets de atendimento e atualizações de estado. A equipe
+          operacional precisa consultar o estado atual; relatórios podem usar uma projeção assíncrona;
+          tickets encerrados podem migrar para consulta histórica. A primeira invariante é que uma
+          resposta de sucesso corresponda a uma escrita confirmada. A segunda é que repetir o mesmo
+          comando com a mesma chave não crie uma nova alteração. A terceira é que cada alteração
+          confirmada tenha um evento recuperável. A quarta é que repetir ou atrasar eventos não faça
+          a projeção regredir. Escreva essas invariantes antes de escolher broker, Kubernetes ou NoSQL:
+          são elas que permitem decidir se uma implementação está correta.
+        tags: [capstone, ERP, invariantes, idempotência, projeto]
+      - title: "Separe necessidade de negócio e hipótese de engenharia"
+        description: >-
+          Requisitos funcionais: criar ou atualizar ticket, consultar estado, propagar uma versão,
+          arquivar projeções encerradas e recuperá-las. Para a arquitetura alvo, proponha autenticação,
+          autorização por tenant e trilha de auditoria. Como hipótese de exercício, considere p99 da
+          escrita de até 500 ms sob a carga declarada, 99% de propagação em até 60 s, RPO de 5 min e
+          RTO de 60 min. Esses números não foram medidos e não são garantias do protótipo. Explique
+          como o negócio os alteraria: um alerta de emergência pode exigir outra latência, enquanto
+          um relatório noturno aceita minutos. Escolhas diferentes devem produzir contratos explícitos.
+      - title: "Entregue uma implementação mínima com fronteiras honestas"
+        description: >-
+          O projeto executável entregue usa API HTTP Python, SQLite, transactional outbox por polling,
+          inbox/projeção em outro arquivo, backup e arquivo JSONL. O laboratório Compose separado
+          demonstra PostgreSQL → WAL → Debezium → Kafka. Não existe nesta entrega uma API PostgreSQL
+          conectada a um consumidor Kafka de projeção: essa junção é uma evolução arquitetural proposta.
+          O protótipo local permite provar as invariantes sem uma biblioteca cliente externa; o CDC
+          real permite observar captura e transporte. Não use o sucesso de um para afirmar que a
+          integração completa foi implementada ou validada. Preserve essa distinção no relatório final.
+        contentBlocks:
+          - type: comparison-block
+            title: "Escopo da entrega"
+            columns:
+              - title: "Mínimo executável"
+                items:
+                  [
+                    "API Python → SQLite/outbox → worker → inbox/projeção.",
+                    "Arquivo verificado e backup local.",
+                    "Dez testes automatizados de invariantes e clientes locais.",
+                  ]
+              - title: "Experimento CDC separado"
+                items:
+                  [
+                    "PostgreSQL → Debezium → Kafka.",
+                    "Configuração completa; estrutura e tags verificadas.",
+                    "Execução de containers não validada neste ambiente.",
+                  ]
+              - title: "Arquitetura alvo"
+                items:
+                  [
+                    "API PostgreSQL e consumo Kafka com projeção.",
+                    "Segurança por tenant, SLOs e recuperação em produção.",
+                    "Requer implementação e testes adicionais.",
+                  ]
+  - id: carga-modelo
+    name: "Volume e modelo de dados"
+    entries:
+      - title: "Faça a conta antes de distribuir"
+        description: >-
+          Suponha um milhão de alterações por dia: a média é cerca de 11,57 alterações/s. Um pico
+          vinte vezes maior representa aproximadamente 231,5/s, ainda insuficiente para concluir que
+          sharding é necessário. Com 1 KiB por evento, o payload diário é cerca de 0,954 GiB; três dias
+          de retenção com três cópias representam cerca de 8,58 GiB só de payload no broker, sem
+          overhead, índices e margem. A escrita no banco e seu WAL são contas adicionais. A cem milhões
+          de alterações/dia, a média vira cerca de 1.157/s: é outro orçamento, mas continua dependendo
+          de transação, hot keys, tamanho, índices e hardware. Registre hipóteses, picos e distribuição
+          de tenants; uma única conta concentrando metade da carga pode dominar o resultado.
+        tags: [capacidade, GiB, throughput, pico, retenção, hot key]
+      - title: "A chave de negócio e a versão conectam as camadas"
+        description: >-
+          No protótipo, tickets usa id inteiro, título, status, versão e updated_at. requests associa
+          a chave idempotente ao digest e à resposta confirmada. outbox contém sequência de transporte,
+          event_id único, payload e estado de entrega. A projeção usa id como chave; inbox usa event_id
+          como chave de deduplicação. Uma versão por ticket permite rejeitar estado antigo mesmo se
+          a entrega sair de ordem. Sequência de outbox não deve ser interpretada como uma ordem causal
+          global entre sistemas independentes. Na arquitetura com tenants, use identidade composta
+          ou IDs globalmente únicos e imponha isolamento em todos os acessos; o protótipo não implementa
+          esse controle. Um evento inclui contrato/versionamento de tipo, não somente um JSON sem dono.
+        codeLanguage: json
+        code: |-
+          {
+            "event_id": "ticket-1-v2",
+            "type": "TicketChanged.v1",
+            "ticket": {
+              "id": 1,
+              "title": "Pedido sintetico",
+              "status": "closed",
+              "version": 2,
+              "updated_at": "2026-10-25T12:00:00+00:00"
+            }
+          }
+      - title: "Leitura imediata tem um caminho definido"
+        description: >-
+          A resposta à escrita contém a versão confirmada. Se o usuário precisa ver imediatamente
+          a própria alteração, consulte a origem ou espere a projeção alcançar aquela versão dentro
+          de um prazo explícito. Ler indiscriminadamente de uma réplica ou projeção atrasada quebra
+          essa expectativa. Relatórios podem aceitar atraso e exibir sua data de atualização. O
+          endpoint /state do protótipo mostra origem e projeção lado a lado para diagnóstico; ele
+          não é uma API de consulta multi-tenant de produção. Essa exposição didática torna a
+          consistência observável sem esconder o atraso atrás de um único rótulo “sincronizado”.
+  - id: fluxo
+    name: "Fluxo ponta a ponta implementado"
+    entries:
+      - title: "Da requisição ao evento recuperável"
+        description: >-
+          A API valida o comando e a chave Idempotency-Key. Dentro de uma transação na origem, verifica
+          repetição, atualiza a versão do ticket, insere o evento e registra a resposta. Somente depois
+          do commit responde. Se a conexão cair após esse commit, repetir a chave recupera a resposta
+          anterior. O worker lê a outbox pendente e aplica inbox e projeção numa transação do destino.
+          Depois confirma a entrega na origem. Há duas fronteiras de commit: essa escolha admite
+          repetição entre elas e exige idempotência. Não há um commit distribuído escondido no código.
+          Um lote limita trabalho e memória, mas não elimina o custo de cada operação.
+        contentBlocks:
+          - type: diagram
+            caption: "Fluxo local implementado; a confirmação da outbox ocorre depois do commit do destino."
+            nodes:
+              - label: "HTTP + chave idempotente"
+                detail: "Valida domínio e identifica uma repetição do mesmo comando."
+              - label: "Transação source.sqlite"
+                detail: "Ticket + versão + outbox + resposta confirmam juntos."
+              - label: "Worker por polling"
+                detail: "Lê pendentes em lotes; pode entregar outra vez após falha."
+              - label: "Transação projection.sqlite"
+                detail: "Inbox deduplica; versão evita regressão; efeito e inbox confirmam juntos."
+              - label: "ACK e consulta"
+                detail: "Origem marca entregue. Consulta e métricas revelam o progresso."
+      - title: "Execute API e worker como processos distintos"
+        description: >-
+          Na pasta labs/sistemas, inicialize o projeto e inicie o servidor. Em outro terminal use
+          o cliente abaixo, depois execute pump e consulte /state. O primeiro estado deve conter o
+          ticket na origem; após pump a projeção o alcança. Use dados de uma pasta nova para evitar
+          comparar com execução anterior. A API escuta em localhost e aceita comandos de atualização
+          pelo mesmo POST, com nova chave e versão crescente. O código é uma base de estudo: usa
+          servidor HTTP da biblioteca padrão, não implementa autenticação, TLS ou autorização e não
+          deve ser exposto à rede. A execução local é independente de Docker.
+        code: |-
+          python erp.py init
+          python erp.py serve
+      - title: "Cliente HTTP mínimo"
+        description: >-
+          Salve o trecho como cliente.py na sua pasta de experimento e execute com Python. Altere a
+          chave apenas para um comando novo; a mesma chave e corpo representam retry. Em outro terminal,
+          python erp.py pump aplica o evento. GET /metrics mostra contadores da API e eventos pendentes;
+          esses contadores em memória reiniciam com o processo. Logs estruturados informam ação,
+          status e duração. Não há um Collector OpenTelemetry ativo nem séries Prometheus neste
+          protótipo. Na evolução, instrumente as mesmas fronteiras sem usar ticket_id como label de
+          métrica de alta cardinalidade.
+        codeLanguage: python
+        code: |-
+          import json
+          import urllib.request
+
+          command = {"id": 1, "title": "Pedido sintetico", "status": "open"}
+          request = urllib.request.Request(
+              "http://127.0.0.1:8765/tickets",
+              data=json.dumps(command).encode(),
+              headers={"Content-Type": "application/json", "Idempotency-Key": "api-1"},
+          )
+          with urllib.request.urlopen(request, timeout=5) as response:
+              print(json.load(response))
+          with urllib.request.urlopen("http://127.0.0.1:8765/state", timeout=5) as response:
+              print(json.load(response))
+  - id: falhas
+    name: "Falhas e recuperação"
+    entries:
+      - title: "A posição da falha muda a ação correta"
+        description: >-
+          Antes do commit da origem, não há alteração aceita. Depois dele e antes da resposta, o
+          resultado é desconhecido ao cliente, mas recuperável pela chave. Antes do commit do destino,
+          inbox e efeito devem reverter. Depois do commit do destino e antes do ACK, a mensagem volta
+          e deve ser reconhecida como duplicada. Se um evento antigo chegar depois, a guarda de versão
+          impede regressão. Os modos pump --crash before/after exercitam essas janelas, sem matar uma
+          máquina real. Demonstre cada estado com inspect e explique a diferença entre exceção injetada,
+          crash de processo e perda física de armazenamento. A evidência não autoriza prometer zero perda.
+        contentBlocks:
+          - type: tech-list
+            title: "Runbook mínimo"
+            items:
+              - term: "Origem tem versão; projeção não"
+                description: "Inspecione pending, worker, erro de aplicação e inbox antes de repetir a escrita."
+              - term: "Pending permanece após crash"
+                description: "Retome o worker; compare event_id e efeito para provar deduplicação."
+              - term: "Origem restaurada a um ponto anterior"
+                description: "Planeje reconciliação de projeção, gerações e eventos; não reutilize offsets cegamente."
+      - title: "Arquivo é um contrato de leitura e recuperação"
+        description: >-
+          O protótipo exporta somente tickets fechados da projeção, escreve manifesto, verifica checksum
+          e contagem e remove da projeção após essa verificação. Reidratar verifica novamente e respeita
+          versões mais novas. A fonte e outbox não são expurgadas, logo não há redução total nem
+          conformidade automática com uma política de eliminação. Na arquitetura alvo, defina catálogo,
+          formato, criptografia, prazo de recuperação e consistência entre exclusão quente e arquivo.
+          Mantenha um período de sobreposição ou um estado de arquivamento reconciliável; dois storages
+          não compartilham automaticamente uma transação. Prove a consulta histórica, não apenas a cópia.
+      - title: "Restore deve recuperar o serviço que o usuário observa"
+        description: >-
+          Execute backup e abra a cópia com --data em outra pasta. Confira integridade, contagens e
+          uma versão de negócio, depois processe pendências e cronometre. O comando usa backups
+          consistentes de cada SQLite, não PITR nem snapshot atômico entre arquivos. Em produção,
+          retenha uma cadeia de recuperação apropriada ao SGBD e teste a reconstrução de projeções
+          e posições de captura. O tempo de provisionar acesso e verificar o destino faz parte do RTO.
+          Recuperar bytes sem recuperar identidade, credenciais e configuração pode deixar o serviço
+          ainda indisponível mesmo com todas as tabelas legíveis.
+  - id: evolucao
+    name: "Arquitetura alvo e decisões"
+    entries:
+      - title: "Substitua transporte sem mudar o significado do evento"
+        description: >-
+          Na evolução proposta, a API grava ticket e outbox em PostgreSQL; Debezium captura a outbox
+          pelo WAL; Kafka armazena eventos por chave do agregado; um consumidor aplica inbox e
+          projeção transacionalmente e só então avança offsets conforme sua política. O laboratório
+          CDC captura tickets diretamente, portanto ainda exige projetar o contrato de outbox,
+          roteamento e consumidor antes de compor esse fluxo. Defina snapshots, deletes, tombstones,
+          evolução de schema, reprocessamento e retenção. A captura técnica de uma tabela não define
+          sozinha um evento de domínio. Teste recuperação após perda da posição e compare reconciliação
+          por chave/versão, não somente volume total de mensagens.
+        contentBlocks:
+          - type: diagram
+            caption: "Arquitetura alvo para implementar como extensão; não é o fluxo integrado entregue."
+            nodes:
+              - label: "API + PostgreSQL"
+                detail: "Transação de domínio e outbox; leitura imediata da origem quando exigida."
+              - label: "WAL + Debezium"
+                detail: "Snapshot, captura e checkpoints; monitoramento de retenção e lag."
+              - label: "Kafka por agregado"
+                detail: "Contrato versionado, chave de ordenação, retenção e replay."
+              - label: "Consumidor + projeção"
+                detail: "Inbox e efeito atômicos; commit de offset após persistência."
+              - label: "Histórico e operação"
+                detail: "Arquivo verificável, telemetria, backup e restauração exercitada."
+      - title: "Registre alternativas descartadas e condições para reconsiderar"
+        description: >-
+          ADR 1: rejeitar dual write ingênuo entre banco e broker por sua janela de inconsistência;
+          escolher outbox com repetição controlada. ADR 2: começar com polling local para reduzir
+          dependências e testar invariantes; considerar CDC quando impacto do polling, integração
+          com legado ou latência justificarem operação adicional. ADR 3: manter um banco relacional
+          antes de adotar sharding ou uma segunda tecnologia; medir padrões de acesso e custo de
+          índices primeiro. ADR 4: não mover o banco para Kubernetes apenas porque a API já está nele;
+          comparar banco gerenciado e Operator por restore, fencing, equipe e custo. Uma decisão
+          fundamentada inclui condição que a tornaria inadequada, não só vantagens da escolha.
+      - title: "Mudanças entre serviços exigem novas invariantes"
+        description: >-
+          Se o projeto ganhar faturamento ou envio de notificações, deduplicar o ticket não deduplica
+          automaticamente esses efeitos. Um email enviado não pode ser desfeito por rollback do banco.
+          Use identificadores e protocolos próprios dos destinos, outra outbox ou uma saga com estados
+          e compensações explícitas. Evite distribuir uma regra que cabia numa transação local sem
+          benefício proporcional. Um monólito modular com boa observabilidade e contratos pode ser a
+          arquitetura adequada à carga inicial. A competência demonstrada é reconhecer limites e
+          escolher o menor sistema que atende os requisitos, inclusive o custo de operá-lo.
+  - id: avaliacao
+    name: "Entrega e critérios de avaliação"
+    entries:
+      - title: "Uma revisão de arquitetura precisa de evidências"
+        description: >-
+          Entregue o modelo, diagrama, três ADRs, orçamento de capacidade, resultados dos experimentos
+          e um runbook. Inclua um fluxo de sucesso e pelo menos três falhas com estado observável.
+          Execute a suíte e demonstre uma repetição de HTTP, uma falha entre commit e ACK, uma versão
+          antiga rejeitada e uma recuperação em pasta distinta. Marque separadamente o que foi medido,
+          estimado, simulado ou apenas proposto. Para a extensão CDC, exija evidência da origem até o
+          efeito no destino: imprimir um evento no console é uma etapa, não todo o projeto. Não há
+          certificado ou credencial acadêmica; a conclusão é sustentada por uma revisão técnica.
+        contentBlocks:
+          - type: checklist-block
+            title: "Rubrica de conclusão"
+            items:
+              - "Correção: invariantes descritas e testes/estados que sustentam cada uma."
+              - "Falhas: distinguir resultado desconhecido, duplicação, perda e atraso."
+              - "Arquitetura: alternativas comparadas e condições para mudar de decisão."
+              - "Operação: métricas, runbook, recuperação e limites de privilégio."
+              - "Capacidade: contas reproduzíveis com taxa, tamanho, pico e retenção."
+              - "Honestidade experimental: separar implementação, configuração, hipótese e medição."
+      - title: "Defenda uma decisão sob mudança de carga"
+        contentBlocks:
+          - type: exercise
+            prompt: "A carga média continua baixa, mas um tenant concentra atualizações numa única linha e o p99 piora. A proposta é adicionar Kafka e vinte Pods. Defenda uma alternativa com critérios de aceitação."
+            answer: >-
+              Primeiro meça waits, hot row, duração transacional e pool. Kafka pode amortecer admissão,
+              mas não remove a serialização da linha; mais Pods podem ampliar a fila. Reduza trabalho
+              na transação, modele o estado para a concorrência necessária ou serialize por agregado
+              com capacidade explícita, mantendo idempotência. Compare p99, throughput útil e atraso
+              antes/depois sob o mesmo perfil. Aceite a mudança somente se cumprir o contrato sem
+              quebrar a invariante, incluindo recuperação e custo operacional.
+            rubric:
+              [
+                "Localizar o gargalo com evidência.",
+                "Preservar invariantes.",
+                "Definir perfil de carga e métricas comparáveis.",
+                "Explicar limites da fila e das réplicas.",
+              ]
+      - title: "Materiais de referência"
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "Debezium 3.3 — Outbox Event Router"
+                url: https://debezium.io/documentation/reference/3.3/transformations/outbox-event-router.html
+              - label: "PostgreSQL 17 — isolamento de transações"
+                url: https://www.postgresql.org/docs/17/transaction-iso.html
+              - label: "Python — sqlite3"
+                url: https://docs.python.org/3/library/sqlite3.html
+              - label: "MIT 6.5840 — sistemas distribuídos"
+                url: https://pdos.csail.mit.edu/6.5840/
+              - label: "Google SRE Workbook — implementação de SLOs"
+                url: https://sre.google/workbook/implementing-slos/

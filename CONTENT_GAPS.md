@@ -28,6 +28,20 @@ segue o padrão editorial de `CONTENT_STANDARD.md`.
 
 ## Lacunas (TODO — não preencher com conteúdo inventado)
 
+### 🟢 Sistemas — formação entregue
+
+Uma orientação e doze módulos em `sistemas-*.yaml` cobrem fundamentos/capacidade,
+storage e planos, transações, modelagem, replicação/consenso, mensageria, CDC,
+ciclo de vida, cloud native, confiabilidade, laboratórios e projeto integrador.
+Exercícios incluem respostas e critérios; fontes oficiais acompanham os módulos.
+Os experimentos locais têm status de validação explícito em
+`labs/sistemas/README.md`: execução Docker/Kubernetes requer ambiente com
+daemon e cluster disponíveis. Não há equivalência com certificação acadêmica.
+
+Fora do recorte: implementação completa de consenso, operação multi-region real,
+benchmark comparativo entre produtos, treinamento de ML e administração exaustiva
+de cada fornecedor. Esses assuntos não são anunciados como laboratórios executados.
+
 ### 🟢 Git — rotina de equipe coberta
 
 - Nove guias, com 44 seções e 104 entries curtas, organizados por problema.
@@ -38,6 +52,7 @@ segue o padrão editorial de `CONTENT_STANDARD.md`.
   escolha de mainline. Acrescentar somente quando surgir demanda concreta.
 
 ### 🔴 Vue — ausente
+
 O prompt do rebuild listava Vue como "já documentado", mas **não existe nenhum
 conteúdo Vue** no repositório legado. A arquitetura já está pronta para receber
 (basta adicionar `src/content/docs/vue-*.yaml` com `tech: vue`); a home passa a
@@ -45,6 +60,7 @@ exibir a seção Vue automaticamente quando houver ≥1 doc. Nenhuma página Vue
 mostrada por ora.
 
 ### 🟢 PHP — núcleo premium concluído
+
 As lacunas principais de PHP foram cobertas nesta rodada:
 
 - Fundamentos da linguagem (`php-fundamentos.yaml`).
@@ -58,11 +74,13 @@ Backlog opcional futuro: páginas dedicadas de performance e segurança se houve
 necessidade real, sem perseguir exaustividade artificial.
 
 ### 🟢 Go — paridade com PHP concluída
+
 - Banco de dados com `database/sql` (`go-banco-dados.yaml`).
 - Capstone de API JSON com `net/http` (`go-api-json.yaml`).
 - Fecho reflexivo (`Decisão Rápida`) em todos os 15 guias.
 
 ### 🟡 Go — backlog (não iniciado)
+
 - Generics (sintaxe e quando simplifica vs. interface).
 - `regexp` (Go não tinha equivalente ao `PHP: Expressões regulares`).
 - Tooling: `go vet`, `staticcheck`, `golangci-lint`.

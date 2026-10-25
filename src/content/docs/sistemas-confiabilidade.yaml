@@ -1,0 +1,263 @@
+id: sistemas-confiabilidade
+title: "Sistemas: confiabilidade e operação"
+subtitle: "Transforme sintomas em hipóteses verificáveis, objetivos de serviço em decisões e backups em recuperação demonstrada."
+cardDescription: "SLIs/SLOs, telemetria, incidentes, segurança, recuperação e custos com evidências."
+tech: sistemas
+order: 100
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: "Infraestrutura e operação"
+  level: avancado
+  prerequisites: [sistemas-cloud-native, sistemas-cdc]
+  objectives:
+    - "Definir SLIs e SLOs para requisições e propagação de dados."
+    - "Relacionar logs, métricas e traces sem confundir correlação com causalidade."
+    - "Diagnosticar atraso e projetar recuperação com RPO/RTO verificáveis."
+    - "Justificar limites de concorrência, segurança e custo operacional."
+sections:
+  - id: objetivos
+    name: "Confiabilidade começa num contrato"
+    entries:
+      - title: "Saúde de processo e sucesso do usuário são medições diferentes"
+        description: >-
+          Um serviço pode responder ao healthcheck enquanto perde eventos ou entrega uma projeção
+          atrasada. Um SLI é uma medida do serviço observado: proporção de requisições válidas bem
+          sucedidas, proporção dentro do limite de latência ou alterações refletidas no destino em
+          até um intervalo. O SLO escolhe a meta e a janela. Declare o denominador, exclusões e o ponto
+          de observação. Um HTTP 202 significa aceitação assíncrona, não conclusão da integração;
+          acompanhe também o estado posterior. Uma meta útil representa uma necessidade do usuário
+          e orienta a resposta operacional. “O banco está no ar” é insuficiente para uma integração
+          cujo contrato exige que o faturamento veja cada alteração em até sessenta segundos.
+        tags: [SLI, SLO, disponibilidade, freshness, lag]
+      - title: "Orçamento de erro permite escolher trabalho"
+        description: >-
+          Um SLO de 99,9% sobre um milhão de requisições elegíveis permite mil requisições ruins na
+          janela. Se a medida for tempo disponível em trinta dias, 0,1% corresponde a 43,2 minutos;
+          não converta automaticamente entre esses denominadores. O error budget restante ajuda a
+          decidir entre novas mudanças e reparo de riscos. Burn rate compara a taxa observada de erro
+          à taxa tolerada: 1% de erro para um SLO de 99,9% queima orçamento dez vezes mais rápido que
+          o ritmo sustentável. Alertas combinando janela curta e longa distinguem uma explosão atual
+          de uma degradação persistente. Não acorde alguém só porque um gráfico cruzou um limiar sem
+          impacto ou ação definida.
+        contentBlocks:
+          - type: reference-card
+            title: "Contrato de exemplo — hipótese de projeto"
+            items:
+              - "API: 99,9% das escritas elegíveis aceitas; p99 de até 500 ms sob carga declarada."
+              - "Pipeline: 99% dos eventos válidos materializados em até 60 s numa janela de 7 dias."
+              - "Recuperação: RPO de 5 min e RTO de 60 min, sujeitos a teste com volume representativo."
+              - "Registre critérios para manutenção, requisições inválidas e eventos sem tráfego."
+  - id: telemetria
+    name: "Sinais que sustentam uma investigação"
+    entries:
+      - title: "Métricas agregam; logs contextualizam; traces conectam etapas"
+        description: >-
+          Métricas mostram taxa, erros, duração e saturação ao longo do tempo. Logs registram eventos
+          com contexto suficiente para explicar uma decisão. Traces relacionam spans de uma operação,
+          incluindo chamadas entre processos. OpenTelemetry padroniza instrumentação, contexto e
+          exportação; um Collector recebe, processa e encaminha sinais, mas não é sozinho um banco de
+          consulta ou dashboard. Prometheus e Grafana podem completar partes dessa arquitetura. Em
+          mensageria, represente produção e consumo com contexto e links conforme a instrumentação;
+          não mantenha uma requisição HTTP aberta por horas só para desenhar uma linha contínua.
+          Correlacione um event_id nos logs, preservando limites de privacidade e amostragem.
+        tags:
+          [OpenTelemetry, Prometheus, Grafana, logs, métricas, traces, spans]
+      - title: "p99 expõe uma cauda que a média esconde"
+        description: >-
+          Se 99% das operações duram até 200 ms, ainda há uma fração mais lenta. O p99 descreve a
+          distribuição observada, não uma garantia por requisição. Um salto pode vir de espera em
+          pool, lock, coleta de lixo, DNS, disco ou retry. Compare histogramas por operação e período.
+          Não calcule um p99 global fazendo média dos p99 de réplicas: agregue buckets compatíveis
+          ou eventos adequados à ferramenta. Poucas amostras e amostragem de traces podem distorcer
+          a percepção de eventos raros. Mantenha uma série de volume junto à latência para distinguir
+          melhora real de ausência de tráfego ou descarte de requisições antes da medição.
+      - title: "Cardinalidade e exposição de dados são custos de projeto"
+        description: >-
+          Labels como ticket_id, request_id e email criam séries praticamente ilimitadas. Use dimensões
+          limitadas como operação, resultado e serviço; IDs específicos pertencem a logs/traces com
+          acesso e retenção definidos. Não publique payloads completos de CDC por conveniência de
+          diagnóstico: eles podem incluir dados apagados da aplicação principal. Controle sampling,
+          tamanho e retenção da telemetria. Um pipeline de observabilidade saturado pode competir
+          com o próprio sistema que observa. Teste falha do exportador e limites de filas para que
+          instrumentação não transforme indisponibilidade do coletor em indisponibilidade de negócio.
+  - id: diagnostico
+    name: "Diagnóstico de ponta a ponta"
+    entries:
+      - title: "Localize a fronteira onde o progresso parou"
+        description: >-
+          Para uma alteração ausente na projeção, comece pela existência e versão na origem. Verifique
+          commit, outbox ou elegibilidade da tabela, posição capturada, estado do conector, evento no
+          broker, offset do grupo e aplicação no destino. Cada fronteira pede evidência diferente.
+          Um task RUNNING não prova que a tabela está incluída; consumer lag zero não prova que o efeito
+          foi persistido, pois o ACK pode ter ocorrido cedo. Registre IDs de correlação, versões e
+          posições. Evite comparar timestamps de máquinas sem considerar desvio de relógio: um lag
+          aparente negativo pode ser um problema de medição. Para pipelines ociosos, heartbeats
+          distinguem silêncio esperado de falta de progresso, conforme o conector e sua configuração.
+        contentBlocks:
+          - type: diagram
+            caption: "Uma investigação segue a alteração e anota evidências em cada fronteira."
+            nodes:
+              - label: "Origem"
+                detail: "Ticket e versão existem? A transação confirmou?"
+              - label: "Captura"
+                detail: "Publicação, tabela, slot e posição avançam?"
+              - label: "Transporte"
+                detail: "O evento chegou ao topic? O grupo tem backlog?"
+              - label: "Destino"
+                detail: "Inbox, versão aplicada e efeito são consistentes?"
+      - title: "Atraso pode consumir a capacidade de recuperar"
+        description: >-
+          Suponha, apenas como exercício, chegada constante de 100 eventos/s e consumidor capaz de
+          140 eventos/s. Uma parada de 36 minutos acumula 216 mil eventos. Depois da volta, o saldo de
+          drenagem é 40 eventos/s, então a recuperação leva 5.400 segundos, ou 90 minutos, se as taxas
+          permanecerem constantes. Dividir backlog por 140 ignoraria novas chegadas. Se o consumidor
+          processa 90/s, nunca alcança a origem nesse cenário. Meça taxa útil, retries e variação de
+          tamanho; capacidade em eventos/s pode mascarar um aumento dos bytes e do custo por evento.
+          A janela de retenção precisa comportar indisponibilidade, recuperação e margem operacional.
+        tags: [backlog, capacity planning, drenagem, throughput, backpressure]
+      - title: "Consulte o banco sem transformar diagnóstico em carga cega"
+        description: >-
+          No PostgreSQL, atividade e waits ajudam a localizar bloqueios; pg_replication_slots ajuda
+          a avaliar retenção. Uma query longa pode prender versões e atrasar manutenção; uma conexão
+          ociosa em transação pode segurar locks sem usar CPU. No MySQL, use ferramentas e tabelas
+          equivalentes da versão, sem supor nomes ou semântica idênticos. Restrinja acessos de
+          diagnóstico e capture uma janela representativa. EXPLAIN ANALYZE realmente executa a
+          consulta: nunca o trate como operação de leitura inofensiva para um UPDATE ou DELETE.
+        code: |-
+          SELECT pid, state, wait_event_type, wait_event,
+                 pg_blocking_pids(pid) AS blockers
+          FROM pg_stat_activity
+          WHERE datname = current_database();
+
+          SELECT slot_name, active,
+                 pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS retained_bytes
+          FROM pg_replication_slots;
+  - id: limites
+    name: "Limites que contêm falhas parciais"
+    entries:
+      - title: "Timeout não desfaz uma gravação remota"
+        description: >-
+          Um cliente pode desistir depois de o servidor confirmar o commit. A resposta perdida deixa
+          resultado desconhecido, não prova de rollback. Defina uma chave idempotente e consulte o
+          resultado antes de repetir uma operação sensível. Reparta um orçamento de tempo entre pool,
+          conexão, chamada e retries; retries que excedem o prazo do chamador gastam capacidade sem
+          melhorar sua resposta. Cancele trabalho quando houver suporte real e não prometa que cancelar
+          o socket cancela a transação. Backoff com jitter reduz sincronização de tentativas, mas um
+          retry ilimitado ainda pode derrubar uma dependência em recuperação.
+        tags: [timeout, retry, jitter, idempotência, falhas parciais]
+      - title: "Circuit breaker e rate limit precisam de semântica de negócio"
+        description: >-
+          Um circuit breaker interrompe temporariamente chamadas após sinais de falha e testa retorno
+          de modo controlado. Rate limiting limita admissão; bulkheads separam recursos de grupos
+          distintos. Uma fila limitada aplica backpressure ou rejeita; uma fila ilimitada adia a
+          falha até a memória ou o disco acabar. Defina se uma rejeição pode ser repetida, se há perda
+          aceitável e como o usuário conhece o estado. Limitar consultas pesadas de um tenant pode
+          proteger os demais, mas exige uma política explicável. Escalar consumidores sem controlar
+          concorrência no banco pode acelerar a saturação, não o progresso.
+  - id: recuperacao
+    name: "Backup, restore e desastre"
+    entries:
+      - title: "RPO mede perda tolerada; RTO mede tempo para voltar"
+        description: >-
+          RPO define o ponto de recuperação aceitável; RTO define o tempo alvo até serviço restaurado.
+          Uma réplica pode copiar um DELETE acidental imediatamente e continuar saudável: isso não
+          substitui uma cópia histórica recuperável. No PostgreSQL, PITR combina um base backup
+          consistente com uma cadeia de WAL preservada e configuração de recuperação. Um dump lógico
+          é útil em outros cenários, mas não oferece sozinho reprodução de todos os pontos de tempo.
+          A política precisa cobrir chaves de criptografia, credenciais, catálogos, versões e acesso ao
+          storage. Perder a chave pode tornar bytes intactos irrecuperáveis.
+        tags: [RPO, RTO, PITR, backup, restore, disaster recovery]
+      - title: "Restaurar só o banco pode deixar o sistema temporalmente dividido"
+        description: >-
+          Após voltar a origem a um ponto anterior, topics e projeções podem conter eventos posteriores.
+          Um offset antigo pode reintroduzir dados removidos; um offset avançado pode pular mudanças
+          necessárias. Estabeleça uma nova geração do pipeline ou uma reconciliação explícita, conforme
+          o incidente. Documente como fencing impede o antigo primary de voltar a escrever e como o
+          tráfego muda de destino. Um teste de restore precisa verificar integridade, contagens,
+          versões e uma operação de negócio, não apenas “o processo subiu”. Cronometre com volume
+          representativo e inclua o tempo de descobrir a falha, obter acesso e validar o resultado.
+      - title: "Backup no mesmo domínio protege contra poucas falhas"
+        description: >-
+          Separe domínio físico e administrativo: conta, região quando necessário e credenciais que
+          a aplicação comprometida não consiga apagar. Considere imutabilidade, retenção e recuperação
+          de chaves conforme o risco. Um arquivo com checksum detecta corrupção acidental, mas não
+          prova autenticidade se o atacante pode trocar arquivo e manifesto. Exercite também restore
+          de configuração do broker, conectores e schemas. Redundância e disaster recovery precisam
+          de procedimentos diferentes para falha de componente, falha de zona e erro humano.
+  - id: operacao-segura
+    name: "Operação sustentável e segura"
+    entries:
+      - title: "Um runbook deve permitir decidir quando parar"
+        description: >-
+          Registre sintoma, impacto, evidências mínimas, contenção reversível, risco de cada ação e
+          critérios de recuperação. “Reinicie o conector” não basta se o slot perdeu WAL e exige
+          resnapshot. Durante o incidente, mantenha linha do tempo e distribua investigação e
+          comunicação sem mudanças concorrentes invisíveis. Depois, faça um postmortem com fatores
+          técnicos e organizacionais, sem atribuir explicações genéricas a “erro humano”. Ações úteis
+          têm dono, prazo e relação com a falha: um alerta sobre retenção, um teste de restore ou uma
+          etapa de migração verificável costumam valer mais que apenas pedir atenção adicional.
+      - title: "Menor privilégio deve sobreviver à rotação"
+        description: >-
+          Separe contas de migração, aplicação, observação e CDC. Use TLS com validação do servidor e
+          proteja dados em repouso conforme a infraestrutura; criptografia não substitui autorização.
+          Teste rotação de senha/certificado sem presumir que pools reconectam imediatamente. Revogue
+          credenciais antigas após confirmar o uso das novas, limite rede e registre acessos sensíveis.
+          Evite segredos em Git, imagens e logs. No laboratório as senhas são fixas, públicas e locais;
+          essa conveniência existe para reproduzir o experimento e não é um desenho de implantação.
+      - title: "O custo inclui margem e gente"
+        description: >-
+          Calcule storage útil e amplificado por índices, réplicas, logs, backups e telemetria. Some
+          transferência entre zonas/regiões, capacidade de pico, tempo de suporte e restauração.
+          Compactar e arquivar reduz uma dimensão e pode aumentar CPU ou tempo de reidratação. Um
+          sistema mais simples que cumpre o SLO pode custar menos e falhar de forma mais compreensível.
+          Não chame capacidade ociosa de desperdício antes de verificar se ela permite absorver uma
+          falha ou drenar backlog. Registre hipóteses e revise-as com custos e medições reais.
+  - id: avaliacao
+    name: "Diagnóstico comentado e referências"
+    entries:
+      - title: "Falha sem mensagem perdida no broker"
+        contentBlocks:
+          - type: exercise
+            prompt: "O consumidor apresenta lag zero, mas um ticket está ausente na projeção. A equipe conclui que o CDC perdeu o evento. Quais evidências faltam e qual hipótese alternativa é relevante?"
+            answer: >-
+              Verifique versão e commit na origem, inclusão na publicação, posição do conector,
+              presença do evento no topic, grupo/offset correto, logs e inbox no destino. O consumidor
+              pode ter confirmado offset antes de persistir o efeito e falhado depois. Lag zero mede
+              posição de consumo, não integridade de negócio. Reconcilie chaves/versões e reprocesse
+              de modo idempotente depois de corrigir a ordem persistir/confirmar.
+            rubric:
+              [
+                "Não assumir perda apenas pelo sintoma.",
+                "Separar offset e efeito.",
+                "Propor recuperação e prevenção verificáveis.",
+              ]
+          - type: exercise
+            prompt: "A outbox acumula 216 mil eventos. Chegam 100/s e processam-se 140/s. Quanto demora drenar e o que deve constar no alerta?"
+            answer: >-
+              Cerca de 90 minutos sob taxas constantes, pois o saldo é 40/s. O alerta deve combinar
+              idade do evento mais antigo, taxa de drenagem e margem para retenção/espaço. Backlog
+              isolado não informa se a recuperação cabe no contrato. Se a taxa útil cair para 100/s
+              ou menos, o backlog não diminui e exige contenção ou capacidade efetiva adicional.
+            rubric:
+              [
+                "Subtrair novas chegadas.",
+                "Calcular 5.400 s.",
+                "Relacionar recuperação a retenção e SLO.",
+              ]
+      - title: "Fontes e aprofundamento"
+        contentBlocks:
+          - type: sources
+            items:
+              - label: "Google SRE — objetivos de serviço"
+                url: https://sre.google/sre-book/service-level-objectives/
+              - label: "Google SRE Workbook — alertas de SLO"
+                url: https://sre.google/workbook/alerting-on-slos/
+              - label: "OpenTelemetry — sinais e contexto"
+                url: https://opentelemetry.io/docs/concepts/
+              - label: "Prometheus — práticas de instrumentação"
+                url: https://prometheus.io/docs/practices/instrumentation/
+              - label: "PostgreSQL 17 — recuperação contínua e PITR"
+                url: https://www.postgresql.org/docs/17/continuous-archiving.html
+              - label: "PostgreSQL 17 — monitoramento de atividade"
+                url: https://www.postgresql.org/docs/17/monitoring-stats.html

@@ -5,6 +5,7 @@
  */
 import { getCollection, type CollectionEntry } from "astro:content";
 import { TECHS, type Tech } from "@/content.config";
+import { validateLearningGraph } from "./learning";
 
 export type DocEntry = CollectionEntry<"docs">;
 
@@ -23,6 +24,14 @@ export interface TechMeta {
 }
 
 export const TECH_META: Record<Tech, TechMeta> = {
+	sistemas: {
+		label: "Engenharia de Dados & Sistemas Distribuídos",
+		short: "Sistemas",
+		tagline:
+			"Dos mecanismos de armazenamento à operação de sistemas cloud native.",
+		icon: "lucide:network",
+		accent: "var(--color-tone-hint)",
+	},
 	php: {
 		label: "PHP",
 		short: "PHP",
@@ -61,7 +70,8 @@ export const TECH_META: Record<Tech, TechMeta> = {
 	arquitetura: {
 		label: "Arquitetura",
 		short: "Arq",
-		tagline: "Padrões, camadas e decisões de estrutura — independentes de linguagem.",
+		tagline:
+			"Padrões, camadas e decisões de estrutura — independentes de linguagem.",
 		icon: "lucide:layers",
 		accent: "#c58bd6",
 	},
@@ -72,6 +82,7 @@ export const TECH_META: Record<Tech, TechMeta> = {
  * categoria na home (JS antes de Vue no Front-end, PHP antes de Go no Back-end).
  */
 export const TECH_ORDER: Tech[] = [
+	"sistemas",
 	"php",
 	"go",
 	"javascript",
@@ -86,7 +97,8 @@ export const TECH_ORDER: Tech[] = [
  * pertence a exatamente uma categoria (ver `TECH_CATEGORY`). UI/UX, no futuro,
  * entra em `conceitos` ao lado de `arquitetura`.
  */
-export type Category = "backend" | "frontend" | "conceitos" | "ferramentas";
+export type Category =
+	"formacao" | "backend" | "frontend" | "conceitos" | "ferramentas";
 
 export interface CategoryMeta {
 	/** Rótulo da faixa (eyebrow). */
@@ -103,6 +115,7 @@ export interface CategoryMeta {
 }
 
 export const CATEGORY_META: Record<Category, CategoryMeta> = {
+	formacao: { label: "Formação avançada", variant: "stack", isNew: true },
 	backend: { label: "Back-end", variant: "stack" },
 	frontend: { label: "Front-end", variant: "stack", isNew: true },
 	conceitos: { label: "Conceitos", variant: "reference" },
@@ -111,6 +124,7 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
 
 /** Ordem das faixas na home. */
 export const CATEGORY_ORDER: Category[] = [
+	"formacao",
 	"backend",
 	"frontend",
 	"conceitos",
@@ -119,6 +133,7 @@ export const CATEGORY_ORDER: Category[] = [
 
 /** A qual categoria cada tech pertence. */
 export const TECH_CATEGORY: Record<Tech, Category> = {
+	sistemas: "formacao",
 	php: "backend",
 	go: "backend",
 	javascript: "frontend",
@@ -134,6 +149,7 @@ function byOrder(a: DocEntry, b: DocEntry): number {
 /** Todas as docs, ordenadas pelo `order` do manifesto. */
 export async function getAllDocs(): Promise<DocEntry[]> {
 	const docs = await getCollection("docs");
+	validateLearningGraph(docs);
 	return docs.sort(byOrder);
 }
 
@@ -180,9 +196,7 @@ export async function getDocsGroupedByCategory(): Promise<CategoryGroup[]> {
 	const techGroups = await getDocsGroupedByTech();
 	const result: CategoryGroup[] = [];
 	for (const category of CATEGORY_ORDER) {
-		const groups = techGroups.filter(
-			(g) => TECH_CATEGORY[g.tech] === category,
-		);
+		const groups = techGroups.filter((g) => TECH_CATEGORY[g.tech] === category);
 		if (groups.length > 0) {
 			result.push({ category, meta: CATEGORY_META[category], groups });
 		}

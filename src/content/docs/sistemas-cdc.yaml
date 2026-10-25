@@ -1,0 +1,191 @@
+id: sistemas-cdc
+title: "CDC: do commit à projeção e à recuperação"
+subtitle: "Seguir uma alteração pelo log, atravessar o snapshot e operar cursores sem confundir captura com efeito aplicado."
+cardDescription: "WAL, binlog, snapshots, Debezium, offsets, deletes, lag e ressincronização."
+tech: sistemas
+order: 70
+readerLayout: narrative
+codeLanguage: sql
+learning:
+  module: "Change Data Capture"
+  level: avancado
+  prerequisites: [sistemas-mensageria, sistemas-transacoes]
+  objectives:
+    - "Explicar como snapshot e posição de log formam uma captura sem lacuna sob as hipóteses do conector."
+    - "Diagnosticar separadamente retenção de WAL, atraso de captura e atraso de aplicação."
+    - "Planejar retomada, replay ou ressincronização conforme a continuidade do log e a integridade do destino."
+sections:
+  - id: problema
+    name: "Qual alteração precisa atravessar a fronteira"
+    entries:
+      - title: "CDC observa persistência, não intenção de negócio"
+        description: >-
+          Change Data Capture identifica alterações persistidas numa fonte e as disponibiliza para outros sistemas. Uma escrita em pedidos pode alimentar busca, analytics ou migração sem cada aplicação implementar uma publicação adicional. O capturador observa efeitos no armazenamento: um update de status não explica necessariamente qual comando ou regra o motivou. Uma transação pode modificar várias tabelas e gerar vários registros de mudança. Se consumidores precisam de intenção estável, capture uma Outbox de eventos de domínio. Se precisam manter uma cópia tabular ou índice, capture as tabelas adequadas e modele identidade, deletes e versão. CDC transporta evidência de mudança; não fornece automaticamente uma transação atômica entre a fonte e cada destino.
+        tags: [cdc, change data capture, WAL, binlog, oplog, Debezium]
+      - title: "Polling, triggers e log têm lacunas diferentes"
+        description: >-
+          Polling por updated_at parece simples, mas relógios, empates, transações longas e exclusões físicas podem escapar de um cursor ingênuo. Um timestamp atribuído antes do commit pode ficar atrás de um watermark já avançado. Sobreposição e deduplicação reduzem riscos, sem tornar qualquer consulta incremental completa. Triggers podem registrar alterações dentro da transação, mas acrescentam acoplamento e custo no caminho de escrita. Captura do log reutiliza o registro transacional, exigindo privilégios, retenção, compatibilidade e operação do conector. Uma varredura periódica de uma tabela pequena pode ser superior a uma plataforma de streaming inteira. Escolha pelo contrato de completude, latência, impacto e recuperação que o caso exige, explicitando como cada operação será observada.
+        contentBlocks:
+          - type: comparison-block
+            title: "Faça a pergunta sobre exclusões"
+            columns:
+              - title: "Polling do estado atual"
+                description: "A linha apagada não aparece na próxima consulta; precisa de soft delete, trilha auxiliar ou reconciliação."
+              - title: "Trigger transacional"
+                description: "Pode registrar a exclusão na transação; exige manter e monitorar essa lógica na fonte."
+              - title: "Log transacional"
+                description: "Pode expor exclusões comprometidas enquanto o histórico necessário continua disponível ao capturador."
+      - title: "WAL, binlog e oplog não são intercambiáveis"
+        description: >-
+          No PostgreSQL, logical decoding interpreta o WAL por um plugin, como pgoutput, e apresenta mudanças lógicas. Um replication slot mantém posição e dependências necessárias à continuidade. No MySQL, Debezium acompanha binlog; configuração de formato, identidade do servidor, retenção e permissões pertencem àquele mecanismo. No MongoDB, change streams oferecem uma API sobre mudanças de replica sets ou clusters particionados, com resume tokens e condições próprias. Não substitua esses cursores por um timestamp de negócio. Eles identificam progresso num histórico técnico específico e podem perder validade quando esse histórico expira ou sua topologia muda. Um runbook de PostgreSQL não deve ser aplicado ao binlog ou ao oplog apenas trocando o nome do serviço.
+  - id: fluxo
+    name: "Uma alteração inteira, fronteira por fronteira"
+    entries:
+      - title: "Do commit à mensagem capturada"
+        description: >-
+          A aplicação inicia uma transação, valida invariantes e modifica dados. O banco produz informações no log ao executar a escrita; a captura de mudanças comprometidas precisa respeitar a conclusão da transação. Depois do commit, o decoder e o conector transformam o histórico em registros com chave, operação e metadados. O registro segue para um transporte; no modelo Kafka Connect, isso envolve tarefas do conector, tópicos de dados e estado de offsets do Connect. A confirmação da API ao usuário não espera necessariamente esse percurso. Um consumidor posterior atualiza a projeção e só depois confirma sua posição. Existem pelo menos três atrasos independentes: fonte até captura, captura até transporte e transporte até efeito consultável.
+        contentBlocks:
+          - type: diagram
+            caption: "Pedido 42: o caminho do dado e os estados necessários para retomar."
+            nodes:
+              - label: "COMMIT na origem"
+                detail: "Pedido e eventual Outbox tornam-se persistidos segundo a política da fonte."
+              - label: "Log e decoder"
+                detail: "Uma posição técnica identifica de onde a captura pode continuar."
+              - label: "Debezium e transporte"
+                detail: "O conector emite registros e conserva progresso; reinícios podem repetir entregas."
+              - label: "Consumidor e Inbox"
+                detail: "Identidade e efeito são persistidos numa transação no destino."
+              - label: "Leitura da projeção"
+                detail: "A interface observa estado materializado, possivelmente atrasado em relação à origem."
+      - title: "O envelope carrega uma operação, não só um documento"
+        description: >-
+          Um evento Debezium de dados normalmente distingue before, after, source e op. A operação pode representar leitura do snapshot, criação, atualização ou exclusão. O campo de origem contém a posição e informações do capturador; o instante de processamento não deve ser confundido com o instante do fato de negócio. No PostgreSQL, o conteúdo anterior depende de replica identity, e não se deve presumir que before contém uma linha completa. Colunas especiais e valores não alterados também exigem leitura das regras do conector. Teste payloads reais da versão fixada, incluindo alteração de chave e exclusão. Um consumidor que apenas faz upsert de after ignora deletes e pode deixar dados removidos vivos na projeção.
+        codeLanguage: json
+        code: |-
+          {
+            "before": {"id": 42},
+            "after": {"id": 42, "status": "confirmado", "versao": 2},
+            "source": {"db": "operacoes", "schema": "public", "table": "pedidos"},
+            "op": "u"
+          }
+        callout:
+          type: hint
+          label: "Envelope didático reduzido"
+          text: "O exemplo omite schema e metadados e não é uma saída capturada do laboratório. O formato efetivo depende dos converters, transformações e da configuração do conector."
+      - title: "Delete de negócio e tombstone de compactação"
+        description: >-
+          Uma exclusão lógica pode ser um update com deleted_at; uma exclusão física gera uma operação de delete quando capturada. No conector PostgreSQL do Debezium, a configuração padrão também emite uma tombstone: mesma chave e valor nulo, para permitir remoção por compactação no Kafka. O evento de delete ainda descreve a mudança; a tombstone atende o mecanismo do log compactado. Não tente interpretar valor nulo como um novo objeto de negócio vazio. Uma mudança de chave primária pode envolver remoção da chave antiga e criação da nova, não um único update no destino. Compactação também não é retenção imediata nem um registro completo de todos os estados históricos para auditoria.
+  - id: snapshot
+    name: "Bootstrap sem uma lacuna invisível"
+    entries:
+      - title: "Snapshot e posição precisam descrever o mesmo corte"
+        description: >-
+          Se copiar todas as linhas e só depois começar a ler mudanças, uma alteração feita durante a cópia pode desaparecer entre as duas fases. Se começar antes sem reconciliar sobreposição, poderá repetir ou regredir valores. Um protocolo de bootstrap combina uma visão consistente do banco com uma posição do log e regras para processar o que aconteceu durante a leitura. Debezium implementa essa coordenação conforme o banco e o modo de snapshot; não substitua o procedimento por um SELECT seguido de um cursor arbitrário. O snapshot pode durar horas, produzir pressão de I/O e manter recursos de transação. Planeje espaço para log retido e comportamento diante de DDL concorrente antes de iniciar numa tabela grande.
+      - title: "Snapshot inicial não é um fluxo de INSERTs novos"
+        description: >-
+          Registros lidos no snapshot representam estado existente no corte definido pelo conector. Eles não significam que o negócio criou cada entidade naquele momento. Um consumidor de notificações que trata snapshot como novo pedido pode disparar ações antigas. Um consumidor de projeção pode aplicar esses registros como bootstrap, com identidade e versão adequadas, e continuar com mudanças. No Debezium 3.3, snapshot.mode=initial orienta o primeiro carregamento quando não existe offset armazenado; um offset existente cujo WAL expirou não deve ser confundido com essa condição inicial. Reiniciar mantendo estado não implica necessariamente executar tudo de novo. Apagar os tópicos de offsets ou trocar a identidade do conector deve ser uma decisão de recuperação, não uma tentativa de resolver erro sem diagnóstico.
+      - title: "O estado do conector também precisa sobreviver"
+        description: >-
+          Dados publicados no tópico não bastam para uma retomada controlada. O worker do Kafka Connect tem configuração, estado e offsets próprios, que precisam de armazenamento e replicação adequados em modo distribuído. O slot da fonte possui outra posição; o consumidor do tópico possui mais uma. Esses cursores não avançam atomicamente até o efeito final no seu banco. Se uma confirmação se perde, a captura pode repetir uma faixa, e o destino precisa tolerar isso. Não mova manualmente um cursor para a frente sem provar o que já foi aplicado: isso pode trocar uma duplicação visível por uma perda silenciosa. Backup de configuração e teste de recuperação devem incluir esses estados técnicos.
+  - id: configuracao
+    name: "Configuração, identidade e evolução"
+    entries:
+      - title: "Configurar o mínimo com uma publicação delimitada"
+        description: >-
+          Para PostgreSQL 17, planeje wal_level=logical, limites de slots e senders, conectividade e uma publicação das tabelas necessárias. Um administrador prepara privilégios e publicação; o conector usa uma conta dedicada com acesso compatível. publication.autocreate.mode=disabled evita depender de criação automática por uma conta privilegiada. O exemplo mostra campos centrais de um conector Debezium 3.3 no Kafka Connect e pressupõe publicação e slot gerenciados conforme sua política. Ele não instala o worker nem fornece credenciais. Em produção, proteja transporte, segredos, tópicos e dados sensíveis. A filtragem deve existir em cada fronteira pertinente: capturar uma coluna e mascará-la só no consumidor ainda a expõe no transporte e em seus logs.
+        codeLanguage: json
+        code: |-
+          {
+            "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+            "database.hostname": "postgres",
+            "database.port": "5432",
+            "database.dbname": "operacoes",
+            "database.user": "captura",
+            "plugin.name": "pgoutput",
+            "topic.prefix": "erp",
+            "slot.name": "devdocs_cdc",
+            "publication.name": "devdocs_publication",
+            "publication.autocreate.mode": "disabled",
+            "table.include.list": "public.pedidos,public.outbox",
+            "snapshot.mode": "initial"
+          }
+        callout:
+          type: warn
+          label: "Configuração parcial para estudar"
+          text: "Não é um laboratório executado nem uma instalação pronta. Faltam autenticação segura e configuração do worker/transporte; use os arquivos completos do laboratório para prática local. Não use uma conta administrativa no conector para contornar permissões."
+      - title: "Replica identity tem custo e propósito"
+        description: >-
+          Uma projeção precisa localizar a linha a alterar ou apagar. Chave primária e replica identity definem parte da informação disponível no PostgreSQL. REPLICA IDENTITY FULL pode fornecer valores anteriores mais amplos quando necessários, ao custo de mais informação no log e no pipeline. Não a ative em toda tabela por hábito: determine quais colunas o consumidor realmente precisa e meça impacto. Inserções, updates sem alteração de chave, mudanças de chave e deletes merecem casos de teste separados. Se o destino agrega valores, uma duplicação pode somar duas vezes; se mantém estado por versão, um update antigo pode sobrescrever um novo sem proteção. Identidade física da linha e identidade do evento são contratos distintos.
+      - title: "DDL e contrato de evento evoluem em ritmos diferentes"
+        description: >-
+          Adicionar uma coluna na origem não atualiza automaticamente validadores, serializers, tabelas de destino ou consultas. Um conector pode observar schema e ainda assim publicar algo que um consumidor antigo rejeita. Faça mudanças expansivas primeiro: leitores tolerantes, novos campos opcionais e escrita compatível; depois migre e remova dependências antigas. Renomear ou alterar tipos pede uma estratégia explícita de compatibilidade e, às vezes, reconstrução da projeção. Contratos de domínio numa Outbox podem permanecer estáveis enquanto o schema interno muda, mas exigem manter o produtor desse contrato. Teste também replay de eventos anteriores à migration. A sequência de deploy precisa cobrir leitores atrasados, não apenas os processos atualmente conectados.
+  - id: operacao
+    name: "Retenção, diagnóstico e retomada"
+    entries:
+      - title: "Slot inativo pode reter o disco inteiro"
+        description: >-
+          No PostgreSQL, restart_lsn indica o ponto antigo ainda necessário ao slot; confirmed_flush_lsn informa progresso confirmado pelo cliente de replicação. Uma distância crescente até o WAL atual merece investigação, especialmente quando o conector está parado. max_slot_wal_keep_size pode limitar retenção, mas isso troca o risco de ocupar disco pelo risco de invalidar continuidade. Não equivale a uma proteção sem consequência. Estime bytes por segundo de WAL com a carga real, duração tolerada de parada e margem para picos e snapshots. Um banco que grava 20 MiB/s pode produzir cerca de 70 GiB por hora: é uma hipótese numérica, não o tamanho de suas linhas. Índices e atualizações amplificam o volume.
+        code: |-
+          SELECT slot_name, active, restart_lsn, confirmed_flush_lsn,
+                 wal_status,
+                 pg_size_pretty(
+                   pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+                 ) AS distancia_wal
+          FROM pg_replication_slots
+          WHERE slot_type = 'logical';
+        callout:
+          type: hint
+          label: "Monitoramento, não limpeza"
+          text: "Execute no primary PostgreSQL 17 com permissão de monitoramento. A distância em bytes não é uma medição exata de espaço físico exclusivo do slot nem de tempo até o negócio ficar atualizado."
+      - title: "Lag de captura e lag de aplicação exigem ações diferentes"
+        description: >-
+          Se a posição da fonte não avança no conector, investigue tarefa, conexão, permissões, bloqueios de snapshot e espaço. Se a captura avança mas o consumidor não, examine backlog, erro de contrato, destino e concorrência. Se offsets avançam e a projeção permanece errada, suspeite do algoritmo, filtros ou confirmação antes do efeito. Correlacione uma alteração sintética identificável em cada etapa e preserve horários de fonte, captura e aplicação sem presumir relógios perfeitos. Em fontes pouco movimentadas, heartbeats podem ajudar a tornar progresso observável; a configuração depende do conector e da publicação. A métrica de lag sozinha não demonstra completude, porque um filtro errado pode descartar dados rapidamente.
+      - title: "Decidir entre retomar, repetir e ressincronizar"
+        description: >-
+          Retome do cursor quando o histórico necessário existe e o destino está consistente até seu checkpoint. Reprocesse uma faixa quando os eventos continuam disponíveis, mas o consumidor aplicou uma versão errada. Faça novo bootstrap quando existe lacuna irrecuperável no log ou quando não se consegue provar o estado do destino. Recriar slot e continuar do presente não reconstrói as alterações perdidas. Na ressincronização, prefira destino novo, snapshot coordenado, captura das alterações concorrentes, validação por contagens e invariantes e troca controlada de leitura. Exclusões ocorridas durante a interrupção precisam ser reconciliadas: um upsert do estado atual não remove automaticamente linhas órfãs da projeção anterior. Preserve a cópia antiga até a comparação terminar.
+      - title: "Failover da fonte também é failover do histórico"
+        description: >-
+          Uma réplica promovida pode conter os dados de negócio sem possuir o mesmo estado utilizável de captura. PostgreSQL 17 oferece recursos de slots de failover sob configuração adequada, mas verificar sua continuidade continua obrigatório. Compare identidade do banco, publicação, plugin, slot e posição disponível com os offsets preservados pelo conector. Bloqueie avanço cego se não puder provar continuidade. Mudança de host, restauração de backup ou troca de versão pode exigir procedimento diferente, mesmo que a API já esteja saudável. Monitore novamente a projeção depois da retomada e confronte mudanças sintéticas e invariantes. A alta disponibilidade da aplicação e a continuidade do CDC são objetivos relacionados, mas precisam de testes separados.
+  - id: avaliacao
+    name: "Exercícios e fontes"
+    entries:
+      - title: "Recuperar com uma hipótese verificável"
+        contentBlocks:
+          - type: exercise
+            prompt: "O conector ficou parado por 12 horas. O slot está inválido, o tópico conserva apenas 6 horas e a projeção contém pedidos que já foram apagados na fonte. Reiniciar com um slot novo resolve?"
+            answer: "Não recupera a janela perdida nem elimina órfãos. Preserve a projeção antiga e evidências, identifique a lacuna e planeje bootstrap coordenado em destino novo, acompanhando alterações concorrentes. Valide completude e exclusões, compare invariantes, faça a troca de leitura e só depois desative a cópia anterior. Se houver histórico independente, ele pode reduzir a reconstrução, desde que sua cobertura seja demonstrada. Ajuste retenção e alerta para o tempo real de recuperação."
+            rubric:
+              [
+                "Reconhecer lacuna de histórico",
+                "Tratar exclusões e concorrência durante bootstrap",
+                "Exigir validação antes da troca",
+              ]
+          - type: exercise
+            prompt: "O pedido está na fonte e o evento está no tópico, mas a tela de leitura não mudou. Liste evidências para localizar a falha sem reiniciar todos os serviços."
+            answer: "Identifique chave e posição do evento, partição e grupo corretos; consulte posição e erro do consumidor, schema recebido e estado transacional do destino. Confira Inbox, versão da projeção e conexão usada pela tela, incluindo cache ou réplica. Evento presente prova captura daquela alteração, não aplicação. Reiniciar antes de colher evidência pode repetir efeitos e ocultar a causa."
+            rubric:
+              [
+                "Separar fonte, captura, consumo e leitura",
+                "Usar identidade para correlação",
+                "Investigar confirmação e cache",
+              ]
+      - title: "Referências versionadas para conferir o comportamento"
+        contentBlocks:
+          - type: reference-card
+            title: "Observar uma alteração real"
+            links:
+              - label: "Laboratórios: PostgreSQL, Debezium e inspeção de eventos"
+                doc: sistemas-laboratorios
+          - type: sources
+            items:
+              - label: "Debezium 3.3 — conector PostgreSQL, snapshots, eventos e falhas"
+                url: "https://debezium.io/documentation/reference/3.3/connectors/postgresql.html"
+              - label: "PostgreSQL 17 — logical decoding, slots e snapshots exportados"
+                url: "https://www.postgresql.org/docs/17/logicaldecoding-explanation.html"
+              - label: "PostgreSQL 17 — gerenciamento de slots lógicos"
+                url: "https://www.postgresql.org/docs/17/logical-replication.html"
+              - label: "MongoDB — change streams e condições de retomada"
+                url: "https://www.mongodb.com/docs/manual/changestreams/"
+              - label: "Debezium 3.3 — Outbox Event Router"
+                url: "https://debezium.io/documentation/reference/3.3/transformations/outbox-event-router.html"

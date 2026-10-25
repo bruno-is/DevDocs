@@ -7,6 +7,7 @@ import SectionPager from "@/components/docs/SectionPager.astro";
 import ReaderModeToggle from "@/components/docs/ReaderModeToggle.astro";
 import QuickStart from "@/components/docs/QuickStart.astro";
 import Entry from "@/components/docs/Entry.astro";
+import LearningNav from "@/components/docs/LearningNav.astro";
 import { getAllDocs, TECH_META, techAccentVars } from "@/lib/docs";
 import { docParam } from "@/lib/paths";
 
@@ -24,6 +25,7 @@ const navSections = doc.sections.map((s) => ({ id: s.id, name: s.name }));
 const readerMode = doc.readerLayout ?? "panels";
 const isNarrative = readerMode === "narrative";
 const accentStyle = techAccentVars(TECH_META[doc.tech].accent);
+const learningDocs = doc.learning ? await getAllDocs() : [];
 ---
 
 <DocLayout
@@ -75,6 +77,11 @@ const accentStyle = techAccentVars(TECH_META[doc.tech].accent);
 					<ReaderModeToggle />
 				</div>
 			</header>
+			{
+				doc.learning && (
+					<LearningNav entry={entry} docs={learningDocs} position="start" />
+				)
+			}
 
 			<div
 				class:list={["doc-panels", isNarrative && "doc-panels-narrative"]}
@@ -115,6 +122,11 @@ const accentStyle = techAccentVars(TECH_META[doc.tech].accent);
 			</div>
 
 			<SectionPager hidden={isNarrative} />
+			{
+				doc.learning && (
+					<LearningNav entry={entry} docs={learningDocs} position="end" />
+				)
+			}
 		</main>
 	</div>
 </DocLayout>

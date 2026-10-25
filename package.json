@@ -10,11 +10,17 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
+    "prebuild": "npm test && node scripts/package-labs.mjs",
     "build": "astro check && astro build && pagefind --site dist",
+    "postbuild": "npm run check:links",
     "build:fast": "astro build && pagefind --site dist",
+    "prebuild:fast": "npm test && node scripts/package-labs.mjs",
+    "postbuild:fast": "npm run check:links",
     "preview": "astro preview",
     "astro": "astro",
     "check": "astro check",
+    "test": "node --experimental-strip-types --test scripts/learning.test.mjs scripts/learning-progress.test.mjs",
+    "check:links": "node scripts/check-built-links.mjs",
     "migrate": "node scripts/migrate-content.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

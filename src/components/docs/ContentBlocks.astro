@@ -7,6 +7,7 @@ import ComparisonBlock from "./blocks/ComparisonBlock.astro";
 import ChecklistBlock from "./blocks/ChecklistBlock.astro";
 import FlowSteps from "./blocks/FlowSteps.astro";
 import ArchitectureExplorer from "./blocks/ArchitectureExplorer.astro";
+import LearningBlock from "./blocks/LearningBlock.astro";
 
 interface Props {
 	blocks?: ContentBlock[];
@@ -19,6 +20,10 @@ const { blocks = [] } = Astro.props;
 		<div class="grid gap-4">
 			{blocks.map((block) => {
 				switch (block.type) {
+					case "sources":
+					case "exercise":
+					case "diagram":
+						return <LearningBlock block={block} />;
 					case "reference-card":
 						return <ReferenceCard block={block} />;
 					case "tech-list":

@@ -5,23 +5,23 @@ confirmadas no npm em julho/2026 antes de instalar (o ecossistema muda rápido).
 
 ## Stack final (versões instaladas)
 
-| Camada | Escolha | Versão | Nota |
-|---|---|---|---|
-| Framework | **Astro** | `^7.0.6` | Estável mais recente — **não** a v5 do plano original (ver desvio 1). SSG, islands. |
-| UI interativa | **Vue 3** + `@astrojs/vue` | `3.5` / `^7.0.1` | Preferência do usuário. |
-| Conteúdo | **Content Collections** (Content Layer API) | — | `glob()` loader sobre YAML, schema Zod. Config em `src/content.config.ts`. |
-| Estilo | **Tailwind CSS v4** | `^4.3.2` | Config CSS-first (`@theme`) via `@tailwindcss/vite`. |
-| Realce de código | **Shiki** (nativo do Astro) | — | Componente `<Code>` em build-time, tema `github-dark-default` fundido à superfície. |
-| Transição de página | **`<ClientRouter />`** (`astro:transitions`) | — | Nome atual (renomeado de `<ViewTransitions />`). |
-| Scroll reveal | **GSAP + ScrollTrigger** | `^3.15.0` | Zona de descoberta. |
-| Busca | **Pagefind** | `^1.5.2` | Índice estático no build; roda em `npm run build`. |
-| Ícones | **Iconify** via `astro-icon` | `^1.1.5` | Sets `lucide` + `simple-icons`, tree-shaken. |
-| Fontes | **Fontsource** (self-hosted) | `5.x` | Space Grotesk (display), Onest (corpo), JetBrains Mono (código). Todas OFL, offline, sem CDN. |
-| Qualidade | TypeScript strict, Prettier, `astro check` | TS `^6` | — |
+| Camada              | Escolha                                      | Versão           | Nota                                                                                          |
+| ------------------- | -------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
+| Framework           | **Astro**                                    | `^7.0.6`         | Estável mais recente — **não** a v5 do plano original (ver desvio 1). SSG, islands.           |
+| UI interativa       | **Vue 3** + `@astrojs/vue`                   | `3.5` / `^7.0.1` | Preferência do usuário.                                                                       |
+| Conteúdo            | **Content Collections** (Content Layer API)  | —                | `glob()` loader sobre YAML, schema Zod. Config em `src/content.config.ts`.                    |
+| Estilo              | **Tailwind CSS v4**                          | `^4.3.2`         | Config CSS-first (`@theme`) via `@tailwindcss/vite`.                                          |
+| Realce de código    | **Shiki** (nativo do Astro)                  | —                | Componente `<Code>` em build-time, tema `github-dark-default` fundido à superfície.           |
+| Transição de página | **`<ClientRouter />`** (`astro:transitions`) | —                | Nome atual (renomeado de `<ViewTransitions />`).                                              |
+| Scroll reveal       | **GSAP + ScrollTrigger**                     | `^3.15.0`        | Zona de descoberta.                                                                           |
+| Busca               | **Pagefind**                                 | `^1.5.2`         | Índice estático no build; roda em `npm run build`.                                            |
+| Ícones              | **Iconify** via `astro-icon`                 | `^1.1.5`         | Sets `lucide` + `simple-icons`, tree-shaken.                                                  |
+| Fontes              | **Fontsource** (self-hosted)                 | `5.x`            | Space Grotesk (display), Onest (corpo), JetBrains Mono (código). Todas OFL, offline, sem CDN. |
+| Qualidade           | TypeScript strict, Prettier, `astro check`   | TS `^6`          | —                                                                                             |
 
 ## Hospedagem
 
-GitHub Pages (`Burnninel/DevDocs`): `site: https://burnninel.github.io`, `base: /DevDocs`.
+GitHub Pages (`bruno-is/DevDocs`): `site: https://bruno-is.github.io`, `base: /DevDocs`.
 Deploy por GitHub Actions (`.github/workflows/deploy.yml`), com Pagefind rodando
 dentro do build. Links internos sempre via helpers em `src/lib/paths.ts`
 (`withBase`, `docUrl`, `techUrl`) — o Astro não prefixa `base` automaticamente.
@@ -68,3 +68,31 @@ dentro do build. Links internos sempre via helpers em `src/lib/paths.ts`
 A troca de seção esconde as inativas **via classe** (`.reader-js` gate), não via
 `hidden`, para não afetar a indexação estática do Pagefind e manter tudo legível
 sem JS.
+
+## Formação em sistemas de dados (outubro/2026)
+
+- **Mesma coleção, extensão aditiva.** As unidades de estudo usam `tech: sistemas`
+  e `learning` opcional. Slugs, schema básico e URLs dos guias anteriores são
+  preservados. Uma landing estática específica substitui somente a landing
+  genérica dessa nova tecnologia. Sua orientação editorial também vem de YAML.
+- **Uma ordem.** `order` e `learning.prerequisites` alimentam mapa, links anteriores/
+  próximos e validação do grafo. O build recusa referências ausentes, dependências
+  futuras/cíclicas e ordens duplicadas. Não existe uma segunda lista de aulas no UI.
+- **Leitura e consulta.** Narrativa é o padrão inicial das aulas; a preferência do
+  leitor continua disponível. Seções continuam indexadas por Pagefind e têm hashes
+  estáveis. Metadados repetidos de navegação ficam fora do índice das aulas.
+- **Blocos sem runtime pesado.** Fluxos anotados em listas ordenadas com legenda
+  representam sequências, sem sugerir arestas arbitrárias. Comparações e topologias
+  usam blocos existentes. Exercícios com resposta comentada usam `details/summary`;
+  referências têm HTTPS validado no schema. Nenhum renderer executa conteúdo YAML.
+- **Progresso privado e limitado.** Marcações locais de autoavaliação, sem login ou
+  promessa de competência. Falha de armazenamento degrada para memória da sessão.
+- **Experimentos distintos.** O ERP Python demonstra atomicidade e idempotência
+  com polling de outbox; o Compose separado demonstra captura de WAL. Não chamamos
+  a simulação de CDC. Dependências de containers são versionadas e não apresentadas
+  como recomendação de produção. Status de validação fica nos arquivos do laboratório.
+- **Publicação.** Corrigido o `site` após confirmar o proprietário remoto atual;
+  o `base: /DevDocs` permanece. O workflow existente chama `npm run build`;
+  seus hooks `prebuild`/`postbuild` validam currículo e links sem alterar o YAML
+  do workflow (a credencial de push disponível não possui escopo `workflow`).
+  O ZIP dos laboratórios é determinístico e gerado em Node, sem instalação extra.

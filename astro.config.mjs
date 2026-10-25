@@ -66,10 +66,10 @@ function phpWasmUrlImports({ warnIfUnmatched = false } = {}) {
 	};
 }
 
-// GitHub Pages project site: https://burnninel.github.io/DevDocs/
+// GitHub Pages project site: https://bruno-is.github.io/DevDocs/
 // `site` + `base` must stay in sync with the repository name.
 export default defineConfig({
-	site: "https://burnninel.github.io",
+	site: "https://bruno-is.github.io",
 	base: "/DevDocs",
 	trailingSlash: "always",
 	build: {

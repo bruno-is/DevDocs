@@ -1,0 +1,203 @@
+id: sistemas-modelagem
+title: "Sistemas: modelagem, NoSQL e decisões de armazenamento"
+subtitle: Escolha estruturas e tecnologias a partir de padrões de acesso, invariantes, atraso tolerável e custo operacional.
+cardDescription: Relacione MongoDB, Redis, OLTP, OLAP e busca às perguntas que cada armazenamento precisa responder.
+tech: sistemas
+order: 40
+readerLayout: narrative
+codeLanguage: javascript
+learning:
+  module: Modelagem orientada à carga
+  level: intermediario
+  prerequisites: [sistemas-transacoes]
+  objectives:
+    - Comparar modelos relacionais, documentais e chave-valor pelas operações exigidas.
+    - Definir limites de agregados, índices e duplicações com uma política de atualização.
+    - Explicar o papel de replica sets, sharding e change streams no MongoDB.
+    - Projetar cache e projeções com tratamento explícito de perda, atraso e reconstrução.
+quickStart:
+  title: Liste perguntas antes de desenhar coleções
+  kicker: Um catálogo de decisões
+  description: Use a plataforma fictícia de chamados. Ela precisa editar um chamado, listar os recentes de um tenant, pesquisar texto e produzir indicadores históricos. Esses acessos podem compartilhar armazenamento; separá-los exige demonstrar benefício e assumir reconciliação.
+  steps:
+    - Descreva cada acesso com filtro, ordem, frequência e volume retornado.
+    - Identifique quais operações precisam confirmar juntas.
+    - Dê a cada cópia um proprietário e um processo de reconstrução.
+sections:
+  - id: carga-e-invariantes
+    name: Padrões de acesso e limites
+    entries:
+      - title: Um modelo deve responder perguntas e preservar regras
+        description: >-
+          Um diagrama de entidades explica relações, mas não informa sozinho o custo da carga. Registre consultas e escritas relevantes: listar os vinte chamados abertos de um tenant, acrescentar uma mensagem, encerrar um chamado e somar atendimentos por mês. Para cada uma, anote filtro, ordenação, frequência, distribuição de chaves, tamanho e atraso tolerável. Depois registre invariantes, como não aceitar mensagem de outro tenant e não concluir duas vezes a mesma operação faturável. O modelo precisa equilibrar esses dois lados. Colocar tudo em uma tabela evita certa infraestrutura, mas não elimina a necessidade de índices e políticas de retenção. Separar em muitos bancos também não remove relações; transfere a obrigação de mantê-las para protocolos e operação.
+        contentBlocks:
+          - type: tech-list
+            title: Ficha mínima de um acesso
+            items:
+              - term: Consulta operacional
+                description: Tenant e estado; ordem por criação e ID; vinte linhas; baixa latência; dado recente.
+              - term: Escrita transacional
+                description: Transição de estado com versão esperada; confirmação durável; identidade idempotente.
+              - term: Indicador histórico
+                description: Agregação por mês; muitas linhas; atraso explícito aceitável; custo por leitura diferente.
+      - title: Um agregado define o que muda junto
+        description: >-
+          Um agregado é um limite de consistência do domínio, não simplesmente qualquer objeto JSON. Um chamado e seu resumo podem mudar juntos; seu histórico completo de mensagens cresce indefinidamente e pode merecer armazenamento separado. Em um documento, dados lidos juntos podem evitar múltiplas buscas, mas arrays ilimitados tornam atualização, tráfego e tamanho imprevisíveis. Referências reduzem duplicação e permitem crescimento independente, ao custo de mais acessos e coordenação. A escolha depende da cardinalidade e do ciclo de vida. Uma cópia do nome do cliente no chamado pode representar o nome atual ou o nome registrado na abertura: são semânticas diferentes. Declare qual delas deseja antes de criar um processo que reescreve todos os documentos quando alguém altera o cadastro.
+        tags: [agregado, documento, referência, embedding, cardinalidade]
+      - title: Schema flexível continua tendo contrato
+        description: >-
+          Ausência de uma coluna obrigatória no catálogo não impede o código de depender dela. Documentos precisam de tipos, campos essenciais, limites e regras de evolução; caso contrário, a complexidade aparece como condicionais espalhados nos leitores. MongoDB oferece validação de schema, e o serviço também deve validar suas entradas. Adicione uma versão quando interpretações realmente mudarem e planeje leitores compatíveis durante a migração. Em SQL, JSONB pode guardar atributos variáveis enquanto identificadores e invariantes permanecem em colunas tipadas. Isso pode atender a necessidade sem adicionar outro serviço. JSON não oferece automaticamente a mesma eficiência para toda consulta: índices, atualização e limites de unidade de escrita continuam existindo. Compare operações reais, incluindo backfill e manutenção, antes de escolher pelo formato recebido na API.
+        tags: [schema, contrato, validação, JSONB, evolução]
+  - id: mongodb
+    name: MongoDB como estudo de mecanismo
+    entries:
+      - title: Atomicidade do documento não elimina transações entre documentos
+        description: >-
+          No MongoDB, uma operação de escrita em um documento é atômica, inclusive quando modifica vários campos. Um filtro pode exigir a versão observada e a atualização pode incrementá-la, aproximando o controle otimista visto no módulo anterior. Uma operação que modifica vários documentos não oferece por isso a mesma atomicidade conjunta; transações multidocumento estão disponíveis em topologias compatíveis e possuem custo e condições próprias. Isso torna o limite do agregado uma decisão importante, mas não justifica embutir dados sem limite. Para uma transferência ou uma regra envolvendo dois agregados, escolha transação, coordenação ou compensação explicitamente. Escrever um documento e depois outro mais rapidamente continua deixando uma janela de falha. Modelos documentais e relacionais diferem em organização e interfaces; ambos precisam preservar a regra de negócio sob concorrência.
+        tags: [MongoDB, atomicidade, documento, transação multidocumento]
+      - title: Índice documental também precisa corresponder ao acesso
+        description: >-
+          No MongoDB 8.0, um índice composto mantém uma ordem de campos que influencia filtros e ordenação. Para a listagem por tenant e estado seguida de criação, comece examinando igualdades, ordenação e eventual intervalo, e confirme com explain. O exemplo é para mongosh, com dados sintéticos em uma coleção de estudo; não foi executado nesta documentação. Com poucos documentos, o ganho não será representativo. Compare documents examined, keys examined, número retornado e necessidade de ordenação. Muitos índices tornam ingestão e atualização mais caras. Arrays indexados criam particularidades multikey e não devem ser tratados como colunas escalares comuns. Um índice não substitui uma regra de autorização: toda consulta precisa restringir corretamente o tenant.
+        code: |-
+          db.chamados_estudo.insertMany([
+            { _id: 1, tenantId: 7, estado: "aberto",
+              criadoEm: ISODate("2026-01-01T10:00:00Z") },
+            { _id: 2, tenantId: 7, estado: "fechado",
+              criadoEm: ISODate("2026-01-02T10:00:00Z") }
+          ]);
+          db.chamados_estudo.createIndex(
+            { tenantId: 1, estado: 1, criadoEm: -1, _id: -1 }
+          );
+          db.chamados_estudo.find({ tenantId: 7, estado: "aberto" })
+            .sort({ criadoEm: -1, _id: -1 }).limit(20)
+            .explain("executionStats");
+        tags: [MongoDB, índice composto, ESR, explain, multikey]
+      - title: Replica set faz cópias; shard distribui partes
+        description: >-
+          Um replica set mantém cópias do conjunto de dados e usa eleição para escolher o primary. As escritas e leituras possuem opções de confirmação e visibilidade: write concern, read concern e read preference respondem perguntas diferentes. Ler de um secondary pode trazer atraso; pedir majority para escrever não significa que qualquer secondary já aplicou aquela mudança. Sharding distribui partes da coleção entre shards, que por sua vez podem ser replica sets. A chave de shard influencia distribuição, consultas direcionadas e concentração de escrita. Uma chave temporal crescente pode concentrar inserções em uma faixa; uma chave com poucos valores limita distribuição. Hashing pode espalhar acessos e prejudicar consultas por intervalo. Mais shards não corrigem uma consulta que precisa perguntar a todos e combinar muito resultado.
+        contentBlocks:
+          - type: comparison-block
+            title: Decida qual problema existe
+            columns:
+              - title: Replicar
+                items:
+                  [
+                    Manter cópias,
+                    Coordenar eleição e failover,
+                    Avaliar confirmação e atraso de leitura,
+                  ]
+              - title: Fragmentar
+                items:
+                  [
+                    Distribuir subconjuntos,
+                    Escolher chave e roteamento,
+                    Lidar com rebalanceamento e operações entre shards,
+                  ]
+      - title: Change stream é uma interface de mudanças, com janela de retomada
+        description: >-
+          MongoDB disponibiliza change streams em replica sets e sharded clusters compatíveis; um servidor standalone não oferece o mesmo mecanismo. A aplicação observa eventos e guarda um resume token para retomar. A retomada depende de condições como histórico necessário ainda disponível e compatibilidade da operação. Oplog possui retenção limitada e não é um arquivo eterno de eventos de domínio. A imagem completa de um documento e a descrição de sua atualização têm semânticas próprias; uma consulta posterior ao estado atual pode enxergar mudanças mais recentes. Persistir o token antes do efeito pode pular trabalho após crash; persistir depois pode exigir reaplicar. O consumidor precisa de coordenação entre efeito e checkpoint e de idempotência. O módulo de CDC detalhará essa fronteira.
+        tags: [change streams, oplog, resume token, checkpoint, CDC]
+  - id: cache-e-redis
+    name: Cache e Redis
+    entries:
+      - title: Cache-aside precisa de uma política de obsolescência
+        description: >-
+          Em cache-aside, o leitor procura no cache e, em caso de ausência, busca na fonte e preenche uma cópia. Defina TTL, tamanho, comportamento sob erro e atraso aceitável. Invalidar após atualizar o banco reduz parte da obsolescência, mas há uma corrida: um leitor pega o valor antigo antes do commit, espera e preenche depois da invalidação. TTL limita a duração aproximada dessa cópia, não impede sua existência. Versionar valores ou coordenar preenchimento pode ajudar, conforme o contrato. Para dados críticos, voltar à fonte pode ser necessário. Cache é especialmente útil quando uma cópia descartável evita trabalho caro e repetido; se o sistema não consegue funcionar nem recuperar sem aquela chave, você transformou o cache em estado essencial e deve tratá-lo como tal.
+        contentBlocks:
+          - type: diagram
+            caption: Caminho de cache-aside; cada cópia precisa de validade e fonte identificadas.
+            nodes:
+              - label: Leitura no cache
+                detail: Hit atende segundo a política de validade; miss segue para a fonte.
+              - label: Consulta à fonte
+                detail: O banco permanece responsável pelo estado autoritativo escolhido.
+              - label: Preenchimento
+                detail: A cópia guarda versão e TTL quando exigidos pelo contrato.
+              - label: Escrita e invalidação
+                detail: A ordem e as corridas precisam ser analisadas; invalidação isolada não cria atomicidade.
+      - title: Expiração, eviction e persistência são mecanismos separados
+        description: >-
+          TTL representa uma política de expiração de chave. Eviction escolhe quais chaves remover sob pressão de memória; não é obrigatório esperar seu TTL vencer. Uma política noeviction pode recusar novas escritas quando o limite é alcançado, afetando produtores. Persistência RDB registra snapshots e AOF registra operações de escrita com políticas de sincronização; seus custos e janelas de perda diferem. Replicação assíncrona e failover adicionam outra fronteira. Redis pode guardar dados essenciais se a arquitetura assumir explicitamente sua durabilidade e recuperação, mas habilitar persistência não equivale a garantir zero perda em qualquer falha. Teste o efeito de reinício, limite de memória e restauração, incluindo o pico de tráfego quando todas as chaves desaparecem e os leitores procuram o banco.
+        tags: [Redis, TTL, eviction, RDB, AOF, persistência]
+      - title: Stampede e hot key mudam o custo da ausência
+        description: >-
+          Se milhares de clientes observam um miss para a mesma chave, podem executar a mesma consulta simultaneamente e saturar a fonte: cache stampede. Single-flight agrega trabalho concorrente; TTL com jitter espalha expirações; stale-while-revalidate pode atender cópia antiga enquanto uma atualização ocorre, se o negócio aceitar. Nenhuma opção elimina a necessidade de limites e métricas. Uma hot key continua concentrando acesso mesmo em um cluster com várias máquinas. Evite usar um lock com expiração como única proteção para uma invariante crítica: uma pausa longa pode deixar o antigo detentor executando depois que outro adquiriu a chave. Recursos externos podem exigir fencing tokens ou uma transação no sistema que guarda a regra. Escolha o mecanismo pela falha que consegue tolerar.
+        tags: [cache stampede, hot key, single flight, jitter, fencing]
+  - id: oltp-olap-e-especializados
+    name: Cargas transacionais, analíticas e especializadas
+    entries:
+      - title: OLTP e OLAP diferem pelo trabalho predominante
+        description: >-
+          OLTP trata transações operacionais curtas, como alterar um chamado ou reservar estoque. OLAP explora conjuntos maiores para responder perguntas agregadas, como tempo de atendimento por região ao longo do ano. Essas categorias não determinam uma marca de banco nem uma proibição de mistura. Um banco relacional pode executar ambas enquanto os custos e SLOs permitirem. Com crescimento, uma varredura histórica pode disputar cache e I/O com o caminho operacional. Réplicas de leitura podem isolar parte do trabalho, mas ainda aplicam escrita e têm limites. Armazenamento colunar, compressão e execução vetorizada favorecem certas análises ao evitar ler colunas desnecessárias. A decisão de separar precisa incluir atraso, atualização de dimensões, correção de dados e reconciliação do pipeline.
+        tags: [OLTP, OLAP, colunar, analytics, warehouse]
+      - title: Busca e séries temporais exigem propriedades adicionais
+        description: >-
+          Busca textual pode precisar de tokenização, relevância, idioma, tolerância a variações e atualização de índice. Comece avaliando os recursos existentes, como full text search do PostgreSQL, antes de manter outro serviço. Um motor dedicado pode justificar-se por consultas e escala específicas, com uma projeção reconstruível e atraso informado. Séries temporais combinam tempo, dimensões e valores; retenção, downsampling e cardinalidade das dimensões determinam custo. IDs únicos como rótulos de cada medição podem explodir quantidade de séries. Um banco especializado não torna dados ilimitados baratos nem corrige timestamps sem semântica. Diferencie tempo do evento e tempo de ingestão, planeje dados atrasados e decida quando um agregado pode ser considerado fechado ou precisa de correções.
+        tags:
+          [busca, full text search, séries temporais, cardinalidade, event time]
+      - title: Uma projeção materializada é uma cópia com uma função
+        description: >-
+          Denormalizar antecipa trabalho de leitura e transfere custo para escrita, atualização ou reconstrução. Um resumo mensal pode conter contagem e duração total para calcular média corretamente; armazenar apenas médias impede combinar grupos com pesos diferentes. Registre de onde cada campo veio, como corrigir eventos e qual versão foi aplicada. Se uma mensagem duplicada soma novamente a contagem, a projeção fica errada mesmo que todos os componentes estejam disponíveis. Se uma atualização fora de ordem substitui versão 12 por 11, a tela regride. Mantenha identidade, ordenação necessária e política de reprocessamento. Uma projeção de consulta não precisa ser event sourcing: pode ser reconstruída a partir do estado autoritativo e de um histórico limitado, conforme o requisito.
+        tags: [denormalização, materialized view, projeção, reconstrução]
+  - id: decisao-e-caso
+    name: Estudo de caso e critérios de escolha
+    entries:
+      - title: Use uma segunda tecnologia quando ela remove um limite concreto
+        description: >-
+          Para um help desk inicial, PostgreSQL com tabelas, índices, JSONB seletivo e busca textual pode satisfazer muitos acessos. MongoDB pode ser adequado quando agregados documentais e padrões de evolução favorecem seu modelo, com equipe capaz de operá-lo. Redis pode acelerar leituras repetidas, sem virar uma segunda fonte implícita. Um warehouse pode isolar análise histórica quando o workload justificar. Cada componente novo acrescenta versões, credenciais, backup, alertas e modos de falha. Faça uma decisão arquitetural curta: problema medido, alternativas, garantia exigida, custo de implantação e condição de revisão. A escolha não precisa ser eterna; prepare caminhos de extração e migração. Simplicidade significa cumprir o contrato com operação sustentável, e não recusar toda especialização.
+        contentBlocks:
+          - type: checklist-block
+            title: Custo total da cópia
+            items:
+              - Quem é a fonte autoritativa e quem pode editar cada campo?
+              - Quanto atraso e inconsistência a operação tolera?
+              - Como detectar divergência e reconstruir sem perder alterações concorrentes?
+              - Quem restaura, monitora, atualiza e paga cada tecnologia?
+      - title: A decisão correta muda com as premissas
+        contentBlocks:
+          - type: exercise
+            prompt: Uma coleção embute todas as mensagens do chamado em um array. Chamados comuns têm cinco mensagens, mas alguns chegam a centenas de milhares. O acesso principal lista os vinte chamados recentes sem mensagens. Como revisar o modelo?
+            answer: Considere separar mensagens por chamado e manter no documento apenas metadados e resumo limitado. Isso reduz crescimento imprevisível e tráfego da listagem; mensagens precisam de índice por chamado e ordem estável. Se as alterações precisarem confirmar juntas, avalie transação ou uma regra de atualização explícita. Embutir um pequeno subconjunto recente pode ser válido, desde que limitado e reconstruível. A resposta depende do padrão de leitura e da invariante, não apenas da média de cinco mensagens.
+            rubric:
+              - Considera cauda de cardinalidade e tamanho, além da média.
+              - Relaciona o acesso de listagem à estrutura proposta.
+              - Explica a consequência de separar a unidade de escrita.
+          - type: exercise
+            prompt: Redis perdeu todas as chaves e o PostgreSQL começou a recusar conexões. A aplicação estava saudável antes disso. Que problema de arquitetura o incidente revelou e quais evidências orientam a correção?
+            answer: A carga de misses pode ter ultrapassado a capacidade da fonte. Compare miss rate, taxa de consultas, espera do pool, consultas repetidas por chave e saturação do banco. Limite admissão e preenchimentos concorrentes, use single-flight e considere servir cópia antiga somente onde permitido. Não aumente o pool indiscriminadamente. Reavalie se a fonte suporta a ausência do cache e teste a recuperação completa, incluindo aquecimento progressivo.
+            rubric:
+              - Reconstrói a cascata de miss para saturação da fonte.
+              - Usa métricas de cache, pool e banco para distinguir hipóteses.
+              - Propõe limites e recuperação que preservam o contrato de leitura.
+  - id: referencias
+    name: Referências para comparar implementações
+    entries:
+      - title: Consulte a versão antes de escolher uma garantia
+        description: >-
+          Os exemplos documentais foram escritos para MongoDB 8.0 e mongosh; os conceitos de persistência e eviction de Redis devem ser conferidos na versão efetivamente instalada. Replicação, limites de documento, índices, sharding e drivers possuem condições que mudam entre produtos e versões. Use estas fontes para revisar sua decisão e monte uma pequena matriz com operação, confirmação, leitura, recuperação e custo. A formação seguirá com replicação e mensageria: os modelos escolhidos aqui serão avaliados quando houver atraso, duplicação e falha. Antes de avançar, explique como reconstruiria cada cópia do seu desenho e por que uma nova tecnologia melhora a operação ou a consulta que motivou sua inclusão.
+        contentBlocks:
+          - type: sources
+            title: Documentação oficial por decisão
+            items:
+              - label: MongoDB 8.0 — modelagem orientada a acesso
+                url: https://www.mongodb.com/docs/v8.0/data-modeling/
+              - label: MongoDB 8.0 — atomicidade e transações
+                url: https://www.mongodb.com/docs/v8.0/core/write-operations-atomicity/
+              - label: MongoDB 8.0 — índices compostos
+                url: https://www.mongodb.com/docs/v8.0/core/indexes/index-types/index-compound/
+              - label: MongoDB 8.0 — chave de shard e distribuição
+                url: https://www.mongodb.com/docs/v8.0/core/sharding-shard-key/
+              - label: MongoDB 8.0 — write concern
+                url: https://www.mongodb.com/docs/v8.0/reference/write-concern/
+              - label: MongoDB 8.0 — change streams e retomada
+                url: https://www.mongodb.com/docs/v8.0/changestreams/
+              - label: Redis — persistência RDB e AOF
+                url: https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/
+              - label: Redis — políticas de eviction
+                url: https://redis.io/docs/latest/develop/reference/eviction/
+              - label: Redis — condições e limites de locks distribuídos
+                url: https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/
+              - label: PostgreSQL 17 — JSON e JSONB
+                url: https://www.postgresql.org/docs/17/datatype-json.html
+              - label: PostgreSQL 17 — busca textual
+                url: https://www.postgresql.org/docs/17/textsearch.html

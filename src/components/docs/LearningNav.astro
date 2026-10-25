@@ -1,0 +1,137 @@
+---
+import type { DocEntry } from "@/lib/docs";
+import { docShortTitle } from "@/lib/docs";
+import { docUrl, techUrl, withBase } from "@/lib/paths";
+interface Props {
+	entry: DocEntry;
+	docs: DocEntry[];
+	position: "start" | "end";
+}
+const { entry, docs, position } = Astro.props;
+const learning = entry.data.learning;
+const chapters = docs.filter(
+	(doc) => doc.data.tech === entry.data.tech && doc.data.learning,
+);
+const index = chapters.findIndex((doc) => doc.id === entry.id);
+const previous = chapters[index - 1];
+const next = chapters[index + 1];
+const prerequisites =
+	learning?.prerequisites.map((id) => chapters.find((doc) => doc.id === id)!) ??
+	[];
+const levelLabels = {
+	fundamentos: "Fundamentos",
+	intermediario: "Intermediário",
+	avancado: "Avançado",
+};
+---
+
+{
+	learning && position === "start" && (
+		<aside
+			class="mb-10 grid gap-5 rounded-2xl bg-surface-1 p-5"
+			aria-label="Orientação de estudo"
+			data-pagefind-ignore
+		>
+			<div class="flex flex-wrap items-center justify-between gap-3 font-mono text-xs text-accent">
+				<a href={techUrl(entry.data.tech)} class="underline underline-offset-4">
+					Mapa da formação
+				</a>
+				<span>
+					{learning.module} · {levelLabels[learning.level]}
+				</span>
+			</div>
+			<div>
+				<h2 class="font-display text-lg text-ink">
+					Ao concluir, você conseguirá
+				</h2>
+				<ul class="mt-3 grid list-disc gap-2 pl-5 text-sm leading-relaxed text-muted">
+					{learning.objectives.map((objective) => (
+						<li class="wrap-anywhere">{objective}</li>
+					))}
+				</ul>
+			</div>
+			{prerequisites.length > 0 && (
+				<div>
+					<p class="text-sm text-muted">Conhecimentos anteriores</p>
+					<ul class="mt-2 flex flex-wrap gap-3">
+						{prerequisites.map((doc) => (
+							<li>
+								<a
+									class="text-sm text-accent-strong underline underline-offset-4"
+									href={docUrl(doc.data.tech, doc.id)}
+								>
+									{docShortTitle(doc)}
+								</a>
+							</li>
+						))}
+					</ul>
+				</div>
+			)}
+			<a
+				class="w-fit text-sm text-accent-strong underline underline-offset-4"
+				href={withBase("/labs/sistemas.zip")}
+				download
+			>
+				Baixar arquivos dos laboratórios (ZIP)
+			</a>
+		</aside>
+	)
+}
+
+{
+	learning && position === "end" && (
+		<nav
+			class="mt-12 grid gap-5 rounded-2xl bg-surface-1 p-5"
+			aria-label="Continuar a formação"
+			data-pagefind-ignore
+		>
+			<label class="flex cursor-pointer items-center gap-3 text-sm text-ink-soft">
+				<input
+					type="checkbox"
+					class="size-5 accent-accent"
+					data-learning-complete={entry.id}
+				/>
+				Marcar este capítulo como estudado
+			</label>
+			<p class="text-xs text-muted" data-learning-note>
+				Progresso salvo somente neste navegador. A marcação é uma autoavaliação.
+			</p>
+			<div class="grid gap-4 sm:grid-cols-2">
+				{previous && (
+					<a
+						class="min-w-0 rounded-xl bg-surface-2 p-4 text-sm text-accent-strong hover:text-ink"
+						href={docUrl(previous.data.tech, previous.id)}
+					>
+						<span class="mb-2 block font-mono text-xs text-muted">
+							← Anterior
+						</span>
+						{docShortTitle(previous)}
+					</a>
+				)}
+				{next && (
+					<a
+						class="min-w-0 rounded-xl bg-surface-2 p-4 text-sm text-accent-strong hover:text-ink"
+						href={docUrl(next.data.tech, next.id)}
+					>
+						<span class="mb-2 block font-mono text-xs text-muted">
+							Próximo →
+						</span>
+						{docShortTitle(next)}
+					</a>
+				)}
+				{!next && (
+					<a
+						class="text-sm text-accent-strong underline underline-offset-4"
+						href={techUrl(entry.data.tech)}
+					>
+						Revisitar o mapa e os critérios de conclusão →
+					</a>
+				)}
+			</div>
+		</nav>
+	)
+}
+
+<script>
+	import "@/scripts/learning-progress";
+</script>
